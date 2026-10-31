@@ -25,6 +25,8 @@ pub mod identity;
 pub mod mdns;
 pub mod modules;
 pub mod net;
+pub mod obs;
+pub mod p3;
 pub mod pairing;
 pub mod paths;
 pub mod platform;

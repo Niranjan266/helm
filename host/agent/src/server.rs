@@ -114,6 +114,8 @@ pub struct AppState {
     pub power_dry_run: Option<Arc<DryRunBackend>>,
     pub downloads_dir: PathBuf,
     pub download_root: PathBuf,
+    /// Phase 3: alerts, profiles, stats streams.
+    pub p3: crate::p3::P3State,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -161,6 +163,7 @@ impl AppState {
                 .download_root
                 .clone()
                 .unwrap_or_else(paths::profile_dir),
+            p3: crate::p3::P3State::new(&config.data_dir),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -353,10 +356,11 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         let platform = state.platform.clone();
         tokio::task::spawn_blocking(move || platform.start_watchers(events_tx)).await?
     };
-    let background = vec![
+    let mut background = vec![
         tokio::spawn(pump_events(state.clone(), events_rx)),
         tokio::spawn(poll_windows(state.clone())),
     ];
+    background.extend(crate::p3::spawn(&state));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let task = tokio::spawn(accept_loop(listener, acceptor, state.clone(), shutdown_rx));

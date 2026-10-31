@@ -15,6 +15,10 @@ pub mod media;
 pub mod power;
 pub mod screen;
 pub mod system;
+// Phase 3
+pub mod desktop;
+pub mod fs;
+pub mod monitor;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -28,6 +32,9 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(clipboard::ClipboardModule),
         Arc::new(files::FilesModule),
         Arc::new(screen::ScreenModule),
+        Arc::new(monitor::MonitorModule),
+        Arc::new(desktop::DesktopModule),
+        Arc::new(fs::FsModule),
     ]
 }
 
