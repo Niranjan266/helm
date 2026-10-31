@@ -22,3 +22,5 @@ Thumbs.db
 
 # Never commit local agent data
 Helm-data/
+relay/node_modules/
+relay/.wrangler/

@@ -1,0 +1,32 @@
+name = "helm-relay"
+main = "src/index.ts"
+compatibility_date = "2026-08-15"
+
+# No request or console logs are kept (the relay must not record anything about sessions).
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "HOST_RELAY"
+class_name = "HostRelay"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["HostRelay", "RateLimiter"]
+
+[vars]
+MAX_PHONES_PER_HOST = "4"
+MAX_FRAME_BYTES = "65536"
+HOST_AUTH_TIMEOUT_MS = "10000"
+HOST_IDLE_TIMEOUT_MS = "90000"
+PHONE_IDLE_TIMEOUT_MS = "120000"
+MAX_PENDING_HOSTS = "2"
+CONNECT_BURST = "10"
+CONNECT_PER_MINUTE = "20"
+# Comma-separated TURN URLs for the /turn stub. Empty = /turn answers 501.
+# The shared secret is a secret: `wrangler secret put TURN_SHARED_SECRET`.
+TURN_URLS = ""
