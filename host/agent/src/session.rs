@@ -23,6 +23,14 @@ pub(crate) enum Outgoing {
     Close(CloseCode, &'static str),
 }
 
+/// `gy{dx,dy}` (gyro air mouse, PROTOCOL §12) is handled exactly like `mm`.
+fn gyro_as_move(mut frame: Value) -> Value {
+    if frame.get("k").and_then(Value::as_str) == Some("gy") {
+        frame["k"] = Value::from("mm");
+    }
+    frame
+}
+
 pub type AfterResponse = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 type SharedUpload = Arc<tokio::sync::Mutex<Option<Upload>>>;
@@ -173,7 +181,7 @@ impl Session {
             let (px, py) = crate::stream::normalized_to_desktop(x, y, rect);
             InputCmd::MoveTo(px, py)
         } else {
-            match serde_json::from_value(frame) {
+            match serde_json::from_value(gyro_as_move(frame)) {
                 Ok(e) => InputCmd::Event(e),
                 Err(_) => {
                     return Self::report_input_error(&self.tx, &self.input_error, "bad_params");

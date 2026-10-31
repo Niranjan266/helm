@@ -20,6 +20,7 @@ pub enum TrayCommand {
     ShowPairing,
     PairedDevices,
     ToggleAutostart,
+    CheckUpdates,
     Quit,
 }
 
@@ -75,12 +76,14 @@ fn tray_thread(
         let show = MenuItem::new("Show pairing QR", true, None);
         let devices = MenuItem::new("Paired devices", true, None);
         let autostart = CheckMenuItem::new("Start with Windows", true, autostart_enabled(), None);
+        let updates = MenuItem::new("Check for updates", true, None);
         let quit = MenuItem::new("Quit Helm", true, None);
         menu.append_items(&[
             &show,
             &devices,
             &PredefinedMenuItem::separator(),
             &autostart,
+            &updates,
             &PredefinedMenuItem::separator(),
             &quit,
         ])?;
@@ -88,6 +91,7 @@ fn tray_thread(
             (show.id().clone(), TrayCommand::ShowPairing),
             (devices.id().clone(), TrayCommand::PairedDevices),
             (autostart.id().clone(), TrayCommand::ToggleAutostart),
+            (updates.id().clone(), TrayCommand::CheckUpdates),
             (quit.id().clone(), TrayCommand::Quit),
         ];
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -102,7 +106,7 @@ fn tray_thread(
             .with_icon(icon)
             .build()?;
         // Keep the menu items alive as long as the icon.
-        Ok((tray, show, devices, autostart, quit))
+        Ok((tray, show, devices, autostart, updates, quit))
     })();
     let keep = match built {
         Ok(k) => {

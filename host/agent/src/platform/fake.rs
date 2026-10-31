@@ -454,6 +454,10 @@ impl Platform for FakePlatform {
     fn battery(&self) -> PResult<Option<Battery>> {
         Ok(self.state().battery)
     }
+    fn send_wol(&self, packet: &[u8; 102]) -> PResult<()> {
+        self.record(format!("send_wol:{}", hex::encode(&packet[6..12])));
+        Ok(())
+    }
 
     fn monitors(&self) -> PResult<Vec<Monitor>> {
         Ok(self.state().monitors.clone())

@@ -66,6 +66,7 @@ impl Module for SystemModule {
                     "uptime_s": sysinfo::uptime_s(ctx.state.started),
                     "macs": macs,
                     "battery": battery,
+                    "relay": ctx.state.relay.info(),
                 }))
             }
             _ => Err(RpcError::unknown_method(method)),

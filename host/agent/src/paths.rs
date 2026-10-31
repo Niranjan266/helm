@@ -35,3 +35,18 @@ pub fn helm_downloads_dir() -> PathBuf {
     }
     profile_dir().join("Downloads").join("Helm")
 }
+
+/// The user's roaming application data folder (`%APPDATA%`), from the environment or, when
+/// a launcher (e.g. a service) did not pass one, from the shell.
+pub fn roaming_app_data() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("APPDATA").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(p));
+    }
+    #[cfg(windows)]
+    if let Some(p) = known_folder(&windows::Win32::UI::Shell::FOLDERID_RoamingAppData) {
+        return Some(p);
+    }
+    std::env::var_os("USERPROFILE")
+        .filter(|p| !p.is_empty())
+        .map(|p| PathBuf::from(p).join("AppData").join("Roaming"))
+}
