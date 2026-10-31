@@ -6,6 +6,8 @@ android/.gradle/
 android/.kotlin/
 android/build/
 android/app/build/
+android/wear/build/
+android/wearlink/build/
 android/local.properties
 android/.idea/
 *.iml

@@ -15,3 +15,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Helm"
 include(":app")
+include(":wearlink")
+include(":wear")
