@@ -11,7 +11,7 @@ use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::files::{TransferId, Upload};
-use crate::platform::{InputEvent, Platform, Rect};
+use crate::platform::{InputEvent, PenPhase, PenSample, Platform, Rect};
 use crate::stream::ActiveStream;
 use crate::proto;
 use crate::router::Tier;
@@ -55,6 +55,48 @@ pub struct Session {
     after: Mutex<HashMap<i64, AfterResponse>>,
     /// The screen stream started by this session (`stream.start`), if any.
     stream: Mutex<Option<Arc<ActiveStream>>>,
+    /// Phase 5: the pen thread (created on the first `pn` frame).
+    pen: Mutex<Option<std_mpsc::Sender<PenSample>>>,
+}
+
+/// No `pn` frame for this long = the pen left the screen (the phone sends no "leave").
+pub const PEN_IDLE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Parse a `pn` frame (PROTOCOL §13) into a pen sample on `rect` (tilt in degrees).
+pub fn parse_pen(frame: &Value, rect: Rect) -> Option<PenSample> {
+    let num = |k: &str| frame.get(k).and_then(Value::as_f64);
+    let opt_num = |k: &str| match frame.get(k) {
+        None | Some(Value::Null) => Some(0.0),
+        Some(v) => v.as_f64().filter(|f| f.is_finite()),
+    };
+    let (x, y) = (num("x")?, num("y")?);
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    let phase = match frame.get("state").and_then(Value::as_str)? {
+        "hover" => PenPhase::Hover,
+        "down" => PenPhase::Contact,
+        "up" => PenPhase::Up,
+        "leave" => PenPhase::Leave,
+        _ => return None,
+    };
+    let eraser = match frame.get("eraser") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool()?,
+    };
+    let screen = helm_win_pen::ScreenRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    };
+    let (px, py) = helm_win_pen::map_normalized(x as f32, y as f32, screen);
+    let mut s = PenSample::new(px, py, phase);
+    s.pressure = (opt_num("pressure")? as f32).clamp(0.0, 1.0);
+    s.tilt_x = (opt_num("tilt_x")? as f32).clamp(-90.0, 90.0);
+    s.tilt_y = (opt_num("tilt_y")? as f32).clamp(-90.0, 90.0);
+    s.eraser = eraser;
+    Some(s)
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -79,6 +121,7 @@ impl Session {
             uploads: Mutex::new(HashMap::new()),
             after: Mutex::new(HashMap::new()),
             stream: Mutex::new(None),
+            pen: Mutex::new(None),
         }
     }
 
@@ -168,6 +211,9 @@ impl Session {
         if self.tier < Tier::Remote {
             return Self::report_input_error(&self.tx, &self.input_error, "forbidden");
         }
+        if frame.get("k").and_then(Value::as_str) == Some("pn") {
+            return self.handle_pen(platform, &frame);
+        }
         let cmd = if frame.get("k").and_then(Value::as_str) == Some("ma") {
             let (Some(x), Some(y)) = (
                 frame.get("x").and_then(Value::as_f64),
@@ -244,6 +290,83 @@ impl Session {
         sender
     }
 
+    /// `pn`: pen sample, normalised like `ma`; injected in order on the session's pen thread.
+    fn handle_pen(&self, platform: &Arc<dyn Platform>, frame: &Value) {
+        let Some(rect) = self.pointer_rect(platform) else {
+            return Self::report_input_error(&self.tx, &self.input_error, "internal");
+        };
+        let Some(sample) = parse_pen(frame, rect) else {
+            return Self::report_input_error(&self.tx, &self.input_error, "bad_params");
+        };
+        let mut pen = lock(&self.pen);
+        if pen.is_none() {
+            match platform.new_pen() {
+                Ok(device) => *pen = Some(self.spawn_pen_thread(device)),
+                Err(e) => {
+                    tracing::info!("pen unavailable: {}", e.message);
+                    return Self::report_input_error(&self.tx, &self.input_error, "input_failed");
+                }
+            }
+        }
+        if let Some(sender) = pen.as_ref()
+            && sender.send(sample).is_err()
+        {
+            *pen = None;
+        }
+    }
+
+    fn spawn_pen_thread(
+        &self,
+        device: Box<dyn crate::platform::PenDevice>,
+    ) -> std_mpsc::Sender<PenSample> {
+        let (sender, receiver) = std_mpsc::channel::<PenSample>();
+        let tx = self.tx.clone();
+        let last_error = self.input_error.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("helm-pen-{}", self.id))
+            .spawn(move || {
+                // The phone never sends "leave": the pen leaves range after PEN_IDLE without
+                // `pn` frames, and when the session ends.
+                let mut last: Option<PenSample> = None;
+                let leave = |last: &mut Option<PenSample>| {
+                    if let Some(s) = last.take()
+                        && s.phase != PenPhase::Leave
+                    {
+                        let mut l = s;
+                        l.phase = PenPhase::Leave;
+                        l.pressure = 0.0;
+                        let _ = device.inject(&l);
+                    }
+                };
+                loop {
+                    let sample = match receiver.recv_timeout(PEN_IDLE) {
+                        Ok(s) => s,
+                        Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                            leave(&mut last);
+                            continue;
+                        }
+                        Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    match device.inject(&sample) {
+                        Ok(()) => *lock(&last_error) = None,
+                        Err(e) => {
+                            tracing::debug!("pen input failed: {}", e.message);
+                            Self::report_input_error(&tx, &last_error, "input_failed")
+                        }
+                    }
+                    last = (sample.phase != PenPhase::Leave).then_some(sample);
+                }
+                leave(&mut last);
+                if let Err(e) = device.release() {
+                    tracing::debug!("pen release failed: {}", e.message);
+                }
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("could not start pen thread: {e}");
+        }
+        sender
+    }
+
     /// `ma` maps onto the streamed source, or the primary monitor when nothing streams.
     fn pointer_rect(&self, platform: &Arc<dyn Platform>) -> Option<Rect> {
         if let Some(rect) = self.stream().and_then(|s| s.source_rect()) {
@@ -294,6 +417,7 @@ impl Session {
             s.stop();
         }
         drop(lock(&self.input).take());
+        drop(lock(&self.pen).take());
         lock(&self.after).clear();
         let uploads: Vec<SharedUpload> = lock(&self.uploads).drain().map(|(_, u)| u).collect();
         for u in uploads {

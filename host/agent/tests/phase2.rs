@@ -305,7 +305,7 @@ async fn stream_socket_rejects_pair_and_needs_stream_open() {
         .await
         .unwrap();
     let hello = recv(&mut ws).await;
-    assert_eq!(hello["features"], json!(["p1", "p2", "p3", "p4"]));
+    assert_eq!(hello["features"], json!(["p1", "p2", "p3", "p4", "p5"]));
     send(&mut ws, phone.pair_msg(&hello, &token)).await;
     expect_error(&mut ws, "bad_message").await;
     assert!(server.devices().unwrap().is_empty(), "nothing paired via /stream");
@@ -417,8 +417,10 @@ async fn idr_config_stats_and_adaptive_bitrate() {
     assert!(!video.is_empty());
     assert!(video.windows(2).all(|w| w[1].pts > w[0].pts));
 
-    assert_eq!(ctl.err("record.start", json!({"audio":true})).await, "unsupported");
-    assert_eq!(ctl.err("record.stop", json!({})).await, "unsupported");
+    // Phase 5: recording taps the running stream (fake recorder, nothing written but a stub).
+    assert!(ctl.ok("record.start", json!({"audio":true})).await["path"].is_string());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(ctl.ok("record.stop", json!({})).await["duration_ms"].is_u64());
     server.shutdown().await;
 }
 

@@ -56,6 +56,49 @@ pub enum DeckAction {
     Repeat(Repeat),
     /// Phase 3: PowerPoint / browser / OBS remote command (see [`REMOTE_ACTIONS`]).
     Remote(String),
+    /// Phase 5: call a Home Assistant service (`{"ha":{"service":"light.toggle","entity_id":"…"}}`).
+    Ha(HaCall),
+}
+
+/// A Home Assistant service call from a deck button or trigger.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HaCall {
+    /// `domain.service`, e.g. `light.toggle`.
+    pub service: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<String>,
+    /// Extra service data (merged with `entity_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl HaCall {
+    /// `(domain, service, data)` ready for the Home Assistant client.
+    pub fn parts(&self) -> Result<(String, String, serde_json::Value), String> {
+        let (domain, service) = self
+            .service
+            .split_once('.')
+            .ok_or_else(|| format!("ha service {:?} must look like light.toggle", self.service))?;
+        let slug = |s: &str| {
+            (1..=64).contains(&s.len())
+                && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        };
+        if !slug(domain) || !slug(service) {
+            return Err(format!("ha service {:?} is not valid", self.service));
+        }
+        let mut data = self.data.clone().unwrap_or_default();
+        if let Some(id) = &self.entity_id {
+            if !helm_plugins::ha::valid_entity_id(id) {
+                return Err(format!("ha entity_id {id:?} is not valid"));
+            }
+            data.insert("entity_id".into(), serde_json::Value::String(id.clone()));
+        }
+        if serde_json::to_vec(&data).map(|v| v.len()).unwrap_or(usize::MAX) > MAX_TEXT {
+            return Err("ha data is too large".into());
+        }
+        Ok((domain.into(), service.into(), serde_json::Value::Object(data)))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -171,6 +214,9 @@ fn validate_action(action: &DeckAction, depth: usize) -> Result<usize, String> {
                 return Err(format!("unknown remote action {name:?}"));
             }
         }
+        DeckAction::Ha(call) => {
+            call.parts()?;
+        }
         DeckAction::Macro(steps) => {
             if steps.is_empty() {
                 return Err("macro must not be empty".into());
@@ -253,6 +299,11 @@ pub fn validate_pages(pages: &[Vec<Tile>]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Check one action (triggers, plugins) with the same rules as a deck button.
+pub fn validate_deck_action(action: &DeckAction) -> Result<(), String> {
+    validate_action(action, 0).map(|_| ())
 }
 
 pub fn validate_buttons(buttons: &[DeckButton]) -> Result<(), String> {

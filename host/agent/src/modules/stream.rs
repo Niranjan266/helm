@@ -213,9 +213,15 @@ impl Module for StreamModule {
                     None => Ok(json!({})),
                 }
             }
-            "record.start" | "record.stop" => Err(RpcError::unsupported(
-                "recording is not available in this agent version",
-            )),
+            "record.start" => {
+                let audio = opt_bool(&params, "audio")?.unwrap_or(false);
+                let path = crate::p5::record::start(state, session, audio).await?;
+                Ok(json!({"path": path}))
+            }
+            "record.stop" => {
+                let file = crate::p5::record::stop(state, session.id).await?;
+                Ok(json!({"path": file.path, "duration_ms": file.duration_ms}))
+            }
             _ => Err(RpcError::unknown_method(method)),
         }
     }
