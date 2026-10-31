@@ -1,0 +1,46 @@
+[package]
+name = "helm-win-audio"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Helm: Windows system-audio streaming (WASAPI shared-mode loopback -> 48 kHz -> Opus 20 ms packets)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "helm_win_audio"
+path = "src/lib.rs"
+
+[dependencies]
+# Opus codec: the reference libopus (1.3.x) mechanically translated to Rust (c2rust),
+# BSD-3-Clause like libopus itself. Pure Rust: no CMake, no C compiler, no DLL.
+unsafe-libopus = "0.2.0"
+
+[target.'cfg(windows)'.dependencies]
+# `#[implement]` (used for IMMNotificationClient) expands to paths in `windows_core`.
+windows-core = "0.62.2"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+# The transpiled codec is ~10x slower without optimisation and relies on wrapping arithmetic
+# in a few places. These settings apply when this crate is the build root (tests, examples);
+# the agent's Cargo.toml must repeat them (see README).
+[profile.dev.package.unsafe-libopus]
+opt-level = 3
+overflow-checks = false
+debug-assertions = false
+
+[profile.test.package.unsafe-libopus]
+opt-level = 3
+overflow-checks = false
+debug-assertions = false
