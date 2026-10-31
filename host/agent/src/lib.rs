@@ -2,6 +2,8 @@
 //!
 //! Phase 0: TLS WebSocket server with a pinned self-signed certificate, QR pairing,
 //! persistent trusted devices, mDNS discovery and a small request router.
+//! Phase 1: apps, windows, input, media, volume, brightness, power, dock/deck, clipboard,
+//! file transfer, screenshots and live events, all behind [`platform::Platform`].
 //! The wire contract is `Docs/PROTOCOL.md`.
 //!
 //! ```no_run
@@ -18,16 +20,24 @@
 pub mod audit;
 pub mod devices;
 pub mod dpapi;
+pub mod files;
 pub mod identity;
 pub mod mdns;
 pub mod modules;
 pub mod net;
 pub mod pairing;
+pub mod paths;
+pub mod platform;
 pub mod proto;
 pub mod qr;
 pub mod router;
+pub mod screen;
 pub mod server;
+pub mod session;
+pub mod store;
 pub mod sysinfo;
+#[cfg(windows)]
+pub mod tray;
 pub mod util;
 
 pub use pairing::Pairing;

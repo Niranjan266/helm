@@ -17,6 +17,8 @@ data class SavedPc(
     @SerialName("last_address") val lastAddress: String? = null,
     @SerialName("last_port") val lastPort: Int? = null,
     @SerialName("last_used_ms") val lastUsedMs: Long = 0,
+    /** Wake-on-LAN MACs from `system.info` (best first), `AA:BB:CC:DD:EE:FF`. */
+    val macs: List<String> = emptyList(),
 )
 
 /** An address found on the LAN for a host id (from mDNS). */

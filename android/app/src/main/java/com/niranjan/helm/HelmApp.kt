@@ -10,9 +10,15 @@ import com.niranjan.helm.core.HandshakeMode
 import com.niranjan.helm.core.HelmConnection
 import com.niranjan.helm.core.HelmException
 import com.niranjan.helm.core.LocalCodes
+import com.niranjan.helm.core.MacEntry
+import com.niranjan.helm.core.WakeOnLan
 import com.niranjan.helm.core.PairingUri
 import com.niranjan.helm.core.SavedPc
+import com.niranjan.helm.device.AppSettings
 import com.niranjan.helm.device.DeviceInfoStore
+import com.niranjan.helm.device.IconCache
+import com.niranjan.helm.device.PhoneFiles
+import com.niranjan.helm.device.SharedItem
 import com.niranjan.helm.device.HelmDiscovery
 import com.niranjan.helm.device.KeystoreDeviceSigner
 import com.niranjan.helm.device.SavedPcStore
@@ -52,6 +58,12 @@ class HelmController(context: Context) {
     val deviceInfo = DeviceInfoStore(context)
     val savedPcs = SavedPcStore(context)
     val discovery = HelmDiscovery(context)
+    val settings = AppSettings(context)
+    val icons = IconCache(context)
+    val files = PhoneFiles(context)
+
+    /** Items shared into Helm that have not been sent yet. */
+    val pendingShare = MutableStateFlow<List<SharedItem>>(emptyList())
 
     /** Keystore access is slow-ish; create the key lazily on a background thread. */
     private val signer: DeviceSigner = object : DeviceSigner {
@@ -90,6 +102,7 @@ class HelmController(context: Context) {
                 val ready = withContext(Dispatchers.IO) { conn.connect() }
                 savedPcs.upsert(EndpointPlanner.savedFromPairing(uri, ready, System.currentTimeMillis()))
                 updateName(conn, ready.hostName)
+                rememberMacs(conn, uri.hostId)
             } catch (_: HelmException) {
                 // State flow already shows Failed; nothing is saved.
             }
@@ -119,9 +132,26 @@ class HelmController(context: Context) {
                     ),
                 )
                 updateName(conn, ready.hostName)
+                rememberMacs(conn, pc.hostId)
             } catch (_: HelmException) {
             }
         }
+    }
+
+    /** Saves the PC's Wake-on-LAN MACs (from `system.info`) for when it is offline. */
+    private suspend fun rememberMacs(conn: HelmConnection, hostId: String) {
+        try {
+            val macs = WakeOnLan.chooseMacs(MacEntry.listFrom(conn.request("system.info")))
+            val current = savedPcs.get(hostId) ?: return
+            if (macs.isNotEmpty() && macs != current.macs) savedPcs.upsert(current.copy(macs = macs))
+        } catch (_: HelmException) {
+        }
+    }
+
+    /** Sends Wake-on-LAN magic packets for a saved PC. Returns the number of datagrams sent. */
+    suspend fun wake(pc: SavedPc): Int = withContext(Dispatchers.IO) {
+        val addrs = listOfNotNull(pc.lastAddress) + pc.addresses
+        WakeOnLan.send(pc.macs, WakeOnLan.broadcastTargets(addrs))
     }
 
     private fun updateName(conn: HelmConnection, name: String) {

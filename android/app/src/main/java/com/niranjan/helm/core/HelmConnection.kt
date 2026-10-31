@@ -1,5 +1,8 @@
 package com.niranjan.helm.core
 
+import java.io.InputStream
+import java.io.OutputStream
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -10,6 +13,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,9 +24,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,6 +42,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 
 /** One way to reach the PC. */
 data class Endpoint(val host: String, val port: Int) {
@@ -72,7 +82,12 @@ data class ReadyInfo(
     val hostName: String,
     val endpoint: Endpoint,
     val agentVersion: String?,
+    /** `hello.features` (e.g. `p1` for the Phase 1 methods). Empty for Phase 0 agents. */
+    val features: Set<String> = emptySet(),
 )
+
+/** An `event` message from the agent (PROTOCOL.md §6, §9.4). */
+data class HelmEvent(val name: String, val data: JsonObject)
 
 /**
  * A Helm failure. [code] is either an agent code from PROTOCOL.md (`bad_token`, `unknown_device`,
@@ -95,6 +110,7 @@ object LocalCodes {
     const val REQUEST_TIMEOUT = "request_timeout"
     const val NOT_READY = "not_ready"
     const val CLOSED = "closed"
+    const val TRANSFER_FAILED = "transfer_failed"
 }
 
 /**
@@ -124,15 +140,24 @@ class HelmConnection(
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
-    private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 64)
+    private val _events = MutableSharedFlow<HelmEvent>(extraBufferCapacity = 256)
 
-    /** `event` messages from the agent (none in Phase 0). */
-    val events: SharedFlow<JsonObject> = _events.asSharedFlow()
+    /** `event` messages from the agent (§9.4). Hot: only events after subscribing are seen. */
+    val events: SharedFlow<HelmEvent> = _events.asSharedFlow()
+
+    /** Events with one [name] only. */
+    fun events(name: String): Flow<HelmEvent> = events.filter { it.name == name }
 
     private val started = AtomicBoolean(false)
     private val closedByUser = AtomicBoolean(false)
     private val nextId = AtomicLong(0)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonObject>>()
+
+    /** Runs on the reader before a successful `res` completes (so binary frames are not missed). */
+    private val resultHooks = ConcurrentHashMap<Long, (JsonObject) -> Unit>()
+
+    /** Incoming file data per transfer id (lowercase hex); closed on `file.done`. */
+    private val downloads = ConcurrentHashMap<String, Channel<BinaryFrame>>()
 
     @Volatile
     private var socket: WebSocket? = null
@@ -144,6 +169,7 @@ class HelmConnection(
     private sealed interface WsEvent {
         data object Open : WsEvent
         data class Text(val text: String) : WsEvent
+        class Binary(val bytes: ByteArray) : WsEvent
         data class Failure(val error: Throwable, val httpCode: Int?) : WsEvent
         data class Closed(val code: Int, val reason: String) : WsEvent
     }
@@ -177,6 +203,7 @@ class HelmConnection(
             when (val attempt = handshake(ws, events, endpoint)) {
                 is Attempt.Success -> {
                     readyInfo = attempt.info
+                    hostFeatures = attempt.info.features
                     if (closedByUser.get()) {
                         ws.close(1000, null)
                         throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
@@ -319,6 +346,9 @@ class HelmConnection(
                 hostName = obj.str("host_name") ?: hello.str("host_name") ?: "PC",
                 endpoint = endpoint,
                 agentVersion = hello.str("agent_version"),
+                features = (hello["features"] as? JsonArray).orEmpty()
+                    .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                    .toSet(),
             ),
         )
     }
@@ -335,6 +365,7 @@ class HelmConnection(
             when (val ev = events.receive()) {
                 WsEvent.Open -> continue
                 is WsEvent.Text -> return Incoming.Message(parseObject(ev.text))
+                is WsEvent.Binary -> continue
                 is WsEvent.Failure -> return Incoming.Failed(ev.error, ev.httpCode)
                 is WsEvent.Closed -> return Incoming.Closed(ev.code)
             }
@@ -346,6 +377,7 @@ class HelmConnection(
             when (ev) {
                 WsEvent.Open -> Unit
                 is WsEvent.Text -> handleMessage(ev.text)
+                is WsEvent.Binary -> handleBinary(ev.bytes)
                 is WsEvent.Failure -> {
                     endSession(
                         HelmException(LocalCodes.CONNECTION_LOST, "Connection lost: ${ev.error.message ?: "error"}"),
@@ -368,7 +400,9 @@ class HelmConnection(
                 val deferred = pending.remove(id) ?: return
                 val ok = (obj["ok"] as? JsonPrimitive)?.booleanOrNull == true
                 if (ok) {
-                    deferred.complete(obj["result"] as? JsonObject ?: JsonObject(emptyMap()))
+                    val result = obj["result"] as? JsonObject ?: JsonObject(emptyMap())
+                    resultHooks.remove(id)?.let { hook -> runCatching { hook(result) } }
+                    deferred.complete(result)
                 } else {
                     val err = obj["error"] as? JsonObject
                     deferred.completeExceptionally(
@@ -379,7 +413,14 @@ class HelmConnection(
                     )
                 }
             }
-            "event" -> _events.tryEmit(obj)
+            "event" -> {
+                val name = obj.str("name") ?: return
+                val data = obj["data"] as? JsonObject ?: JsonObject(emptyMap())
+                if (name == "file.done") {
+                    data.str("transfer_id")?.lowercase()?.let { downloads.remove(it)?.close() }
+                }
+                _events.tryEmit(HelmEvent(name, data))
+            }
             "error" -> {
                 // Agent-level error after ready; it will close the socket next.
                 endSession(agentError(obj))
@@ -388,10 +429,16 @@ class HelmConnection(
         }
     }
 
+    private fun handleBinary(bytes: ByteArray) {
+        val frame = BinaryFrame.decode(bytes) ?: return
+        downloads[frame.transferIdHex]?.trySend(frame)
+    }
+
     private fun endSession(error: HelmException?) {
         val failure = error ?: HelmException(LocalCodes.CLOSED, "Connection closed.")
         for ((_, d) in pending) d.completeExceptionally(failure)
         pending.clear()
+        failDownloads(failure)
         if (closedByUser.get()) {
             _state.value = ConnectionState.Closed
         } else if (error != null) {
@@ -404,11 +451,166 @@ class HelmConnection(
         scope.cancel()
     }
 
+    private fun failDownloads(failure: HelmException) {
+        for ((_, ch) in downloads) ch.close(failure)
+        downloads.clear()
+    }
+
+    /** Features from `hello` once ready (empty before). */
+    @Volatile
+    var hostFeatures: Set<String> = emptySet()
+        private set
+
+    /** True when the agent advertises Phase 1 (`p1`). */
+    val supportsPhase1: Boolean get() = "p1" in hostFeatures
+
+    /**
+     * Sends a fire-and-forget input frame (`{"type":"in","k":…}`, §9.1): no id, no reply.
+     * Returns false when not connected or the socket is closing.
+     */
+    fun sendInput(frame: InputFrame): Boolean {
+        val ws = socket ?: return false
+        if (_state.value !is ConnectionState.Ready) return false
+        return ws.send(frame.toJson().toString())
+    }
+
+    /** Sends one binary frame (§9.2). Returns false when not connected. */
+    fun sendBinary(frame: BinaryFrame): Boolean {
+        val ws = socket ?: return false
+        if (_state.value !is ConnectionState.Ready) return false
+        return ws.send(frame.encode().toByteString())
+    }
+
+    /** Waits until fewer than [limit] bytes are queued (OkHttp closes the socket past 16 MiB). */
+    suspend fun awaitQueueBelow(limit: Long) {
+        while (true) {
+            val ws = socket ?: throw HelmException(LocalCodes.CONNECTION_LOST, "Connection lost.")
+            if (ws.queueSize() < limit) return
+            delay(5)
+        }
+    }
+
+    /**
+     * Uploads one file (§9.2-9.3): `file.upload.begin`, binary frames of at most 256 KiB, then
+     * `file.upload.end`. [open] must return a fresh stream of exactly [size] bytes whose
+     * SHA-256 is [sha256Hex]. Returns the path on the PC.
+     */
+    suspend fun uploadFile(
+        name: String,
+        size: Long,
+        sha256Hex: String,
+        open: () -> InputStream,
+        onProgress: (sent: Long) -> Unit = {},
+    ): String {
+        val begin = request(
+            "file.upload.begin",
+            buildJsonObject {
+                put("name", name)
+                put("size", size)
+                put("sha256", sha256Hex.lowercase())
+            },
+        )
+        val tid = begin.str("transfer_id")
+            ?: throw HelmException(LocalCodes.TRANSFER_FAILED, "PC did not return a transfer id.")
+        val idBytes = BinaryFrame.idFromHex(tid)
+            ?: throw HelmException(LocalCodes.TRANSFER_FAILED, "PC returned a bad transfer id.")
+        var offset = 0L
+        withContext(Dispatchers.IO) {
+            open().use { input ->
+                val buf = ByteArray(BinaryFrame.MAX_DATA)
+                while (true) {
+                    val n = input.readFully(buf)
+                    if (n <= 0) break
+                    if (offset + n > size) {
+                        throw HelmException(LocalCodes.TRANSFER_FAILED, "File is larger than expected.")
+                    }
+                    awaitQueueBelow(UPLOAD_QUEUE_LIMIT)
+                    if (!sendBinary(BinaryFrame(idBytes, offset, buf.copyOf(n)))) {
+                        throw HelmException(LocalCodes.CONNECTION_LOST, "Connection lost during upload.")
+                    }
+                    offset += n
+                    onProgress(offset)
+                    if (n < buf.size) break
+                }
+            }
+        }
+        if (offset != size) {
+            throw HelmException(LocalCodes.TRANSFER_FAILED, "File changed while sending ($offset of $size bytes).")
+        }
+        val end = request("file.upload.end", buildJsonObject { put("transfer_id", tid) }, timeoutMs = 60_000)
+        return end.str("path") ?: ""
+    }
+
+    /** Result of [downloadFile]. */
+    data class Download(val name: String, val size: Long, val sha256Hex: String)
+
+    /**
+     * Downloads a file from the PC (`file.download`, admin tier) into [out]. Verifies offsets,
+     * size and SHA-256. [idleTimeoutMs] bounds the wait for each frame.
+     */
+    suspend fun downloadFile(
+        path: String,
+        out: OutputStream,
+        idleTimeoutMs: Long = 30_000,
+        onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
+    ): Download {
+        var channel: Channel<BinaryFrame>? = null
+        val res = request(
+            "file.download",
+            buildJsonObject { put("path", path) },
+            beforeComplete = { r ->
+                // Register the sink on the reader, before any data frame is handled.
+                r.str("transfer_id")?.lowercase()?.let { id ->
+                    channel = Channel<BinaryFrame>(Channel.UNLIMITED).also { downloads[id] = it }
+                }
+            },
+        )
+        val tid = res.str("transfer_id")?.lowercase()
+        val ch = channel
+        if (tid == null || ch == null) throw HelmException(LocalCodes.TRANSFER_FAILED, "PC did not return a transfer id.")
+        val size = (res["size"] as? JsonPrimitive)?.longOrNull ?: -1
+        val expected = res.str("sha256")?.lowercase()
+        val name = res.str("name") ?: path.substringAfterLast('\\').substringAfterLast('/')
+        val digest = MessageDigest.getInstance("SHA-256")
+        var received = 0L
+        try {
+            while (true) {
+                val next = withTimeoutOrNull(idleTimeoutMs) { ch.receiveCatching() }
+                    ?: throw HelmException(LocalCodes.TRANSFER_FAILED, "PC stopped sending the file.")
+                if (next.isClosed) {
+                    val cause = next.exceptionOrNull() ?: break
+                    if (cause is HelmException) throw cause
+                    throw HelmException(LocalCodes.TRANSFER_FAILED, cause.message ?: "Download failed.")
+                }
+                val frame = next.getOrThrow()
+                if (frame.offset != received) {
+                    throw HelmException(LocalCodes.TRANSFER_FAILED, "Out-of-order data at ${frame.offset} (expected $received).")
+                }
+                withContext(Dispatchers.IO) { out.write(frame.data) }
+                digest.update(frame.data)
+                received += frame.data.size
+                onProgress(received, size)
+                if (size in 0 until received) throw HelmException(LocalCodes.TRANSFER_FAILED, "PC sent too much data.")
+            }
+        } finally {
+            downloads.remove(tid)
+        }
+        if (size >= 0 && received != size) {
+            throw HelmException(LocalCodes.TRANSFER_FAILED, "Got $received of $size bytes.")
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (expected != null && expected != actual) {
+            throw HelmException(LocalCodes.TRANSFER_FAILED, "Checksum mismatch.")
+        }
+        return Download(name, received, actual)
+    }
+
     /** Sends `req` and waits for the matching `res`. Throws [HelmException] / [HelmRequestException]. */
     suspend fun request(
         method: String,
         params: JsonObject = JsonObject(emptyMap()),
         timeoutMs: Long = defaultRequestTimeoutMs,
+        beforeComplete: ((JsonObject) -> Unit)? = null,
     ): JsonObject {
         val ws = socket
         if (ws == null || _state.value !is ConnectionState.Ready) {
@@ -417,6 +619,7 @@ class HelmConnection(
         val id = nextId.incrementAndGet()
         val deferred = CompletableDeferred<JsonObject>()
         pending[id] = deferred
+        if (beforeComplete != null) resultHooks[id] = beforeComplete
         val msg = buildJsonObject {
             put("type", "req")
             put("id", id)
@@ -434,6 +637,7 @@ class HelmConnection(
             }
         } finally {
             pending.remove(id)
+            resultHooks.remove(id)
         }
     }
 
@@ -444,6 +648,7 @@ class HelmConnection(
         val failure = HelmException(LocalCodes.CLOSED, "Connection closed.")
         for ((_, d) in pending) d.completeExceptionally(failure)
         pending.clear()
+        failDownloads(failure)
         _state.value = ConnectionState.Closed
         // Let OkHttp finish the close handshake; drop our reader.
         scope.cancel()
@@ -477,6 +682,10 @@ class HelmConnection(
             events.trySend(WsEvent.Text(text))
         }
 
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            events.trySend(WsEvent.Binary(bytes.toByteArray()))
+        }
+
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
             webSocket.close(1000, null)
             events.trySend(WsEvent.Closed(code, reason))
@@ -492,6 +701,19 @@ class HelmConnection(
     }
 
     companion object {
+        /** Keep at most this much file data queued in OkHttp (its hard limit is 16 MiB). */
+        private const val UPLOAD_QUEUE_LIMIT = 2L * 1024 * 1024
+
+        private fun InputStream.readFully(buf: ByteArray): Int {
+            var total = 0
+            while (total < buf.size) {
+                val n = read(buf, total, buf.size - total)
+                if (n < 0) break
+                total += n
+            }
+            return total
+        }
+
         private val json = Json { ignoreUnknownKeys = true }
 
         internal fun parseObject(text: String): JsonObject? = try {

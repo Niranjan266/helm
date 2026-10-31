@@ -63,9 +63,13 @@ pub struct RequestContext {
     pub device_id: String,
     pub tier: Tier,
     pub session_id: u64,
+    /// Id of the request being handled.
+    pub req_id: i64,
     /// Remote address of the connection, for the audit log.
     pub peer: String,
     pub state: Arc<AppState>,
+    /// The calling session (send events to it, run work after the response).
+    pub session: Arc<crate::session::Session>,
 }
 
 /// One method a module offers.

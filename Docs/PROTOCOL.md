@@ -209,6 +209,20 @@ Deck `action` = one of `{"hotkey":"ctrl+shift+esc"}`, `{"text":"…"}`, `{"launc
 `input.textFocus{focused}`, `dock.changed`, `deck.changed`, `clipboard.changed`,
 `power.scheduled{scheduled}`, `file.done`, `input.error`.
 
+### 9.5 Clarifications (settled after Phase 1 build)
+- `mm` deltas are **already accelerated by the phone**; the agent injects them 1:1.
+- Pinch zoom = `kd` ctrl, `ms`, `ku` ctrl. `input.textFocus` data = `{focused}`.
+- `hwnd` and monitor `id` are opaque: send back exactly what was received.
+- `audio.set` uses `level` (0..1); brightness `level` is 0..100; deck `color` is `#RRGGBB`.
+- `MediaState` = `helm-win-system` struct: `app_id,title,artist,album,status,position_ms?,duration_ms?,rate,has_artwork,can_*`.
+- `dock.changed{pages}`, `deck.changed{buttons}`; `file.done{transfer_id,error?}`.
+- `power.action` without `delay_s` replies `{scheduled:null}` and runs ~300 ms later; `power.cancel` returns the state after cancel.
+- `screen.capture` with no `monitor_id` = primary monitor. `apps.icon` `size` defaults to 64.
+- `input.error` codes: `blocked_by_elevation`, `forbidden`, `bad_params`, `input_failed`, `internal`.
+- Upload flow control: sender keeps ≤ 2 MiB unacknowledged in its socket queue.
+- **Open (Phase 2):** responses above 1 MiB (big screenshots/clipboard images) should move to
+  binary transfers; until then receivers must accept text frames up to 16 MiB.
+
 ## 10. Storage on the PC
 
 `%APPDATA%\Helm\` (overridable for tests):
