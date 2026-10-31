@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niranjan.helm.core.DeckAction
 import com.niranjan.helm.core.DeckButton
 import com.niranjan.helm.core.DeckCodec
+import com.niranjan.helm.core.HaState
 import com.niranjan.helm.device.Settings
 
 val DeckColors = listOf("#3B82F6", "#22C55E", "#EF4444", "#F59E0B", "#A855F7", "#EC4899", "#14B8A6", "#64748B")
@@ -73,6 +74,7 @@ internal fun kindOf(a: DeckAction): String = when (a) {
     is DeckAction.Macro -> "macro"
     is DeckAction.Repeat -> "repeat"
     is DeckAction.Remote -> "remote"
+    is DeckAction.Ha -> "ha"
     is DeckAction.Unknown -> "other"
 }
 
@@ -86,6 +88,7 @@ internal fun valueOf(a: DeckAction): String = when (a) {
     is DeckAction.VolumeStep -> a.step.toString()
     is DeckAction.Delay -> a.ms.toString()
     is DeckAction.Remote -> a.command
+    is DeckAction.Ha -> "${a.service} ${a.entityId}"
     is DeckAction.Macro, is DeckAction.Repeat -> ""
     is DeckAction.Unknown -> a.raw.toString()
 }
@@ -101,19 +104,21 @@ internal fun kindLabel(k: String) = when (k) {
     "macro" -> "Macro"
     "repeat" -> "Repeat"
     "remote" -> "App remote"
+    "ha" -> "Home Assistant"
     else -> "Other"
 }
 
-private fun defaultValue(k: String) = when (k) {
+internal fun defaultValue(k: String) = when (k) {
     "media" -> "toggle_play_pause"
     "volume_step" -> "0.05"
     "delay_ms" -> "250"
     "remote" -> "powerpoint.next"
+    "ha" -> "homeassistant.toggle "
     else -> ""
 }
 
 /** Builds a simple action from the editor fields, or null if the value is invalid. */
-private fun buildAction(kind: String, value: String, original: DeckAction?): DeckAction? = when (kind) {
+internal fun buildAction(kind: String, value: String, original: DeckAction?): DeckAction? = when (kind) {
     "hotkey" -> value.trim().takeIf { it.isNotEmpty() }?.let { DeckAction.Hotkey(it.lowercase()) }
     "text" -> value.takeIf { it.isNotEmpty() }?.let { DeckAction.Text(it) }
     "launch" -> value.trim().takeIf { it.isNotEmpty() }?.let { DeckAction.Launch(it) }
@@ -124,6 +129,10 @@ private fun buildAction(kind: String, value: String, original: DeckAction?): Dec
     "remote" -> value.trim().takeIf {
         it in DeckAction.REMOTE_COMMANDS || (it.startsWith(DeckAction.OBS_SCENE_PREFIX) && it.length > DeckAction.OBS_SCENE_PREFIX.length)
     }?.let { DeckAction.Remote(it) }
+    "ha" -> {
+        val parts = value.trim().split(Regex("\\s+"))
+        if (parts.size == 2 && HaState.validService(parts[0]) && HaState.validEntityId(parts[1])) DeckAction.Ha(parts[0], parts[1]) else null
+    }
     else -> original as? DeckAction.Unknown
 }
 
@@ -252,7 +261,8 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
         else -> buildAction(kind, value, button.action)
     }
     val p3 = ui.phase3 || DeckCodec.needsPhase3(button.action) || button.stateBind != null || button.widget != null
-    val kinds = DeckAction.KINDS + if (p3) DeckAction.P3_KINDS else emptyList()
+    val p5 = ui.phase5 || DeckCodec.needsPhase5(button.action)
+    val kinds = DeckAction.KINDS + (if (p3) DeckAction.P3_KINDS else emptyList()) + (if (p5) DeckAction.P5_KINDS else emptyList())
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -379,7 +389,7 @@ private fun StepEditor(step: StepDraft, onChange: (StepDraft) -> Unit) {
 }
 
 @Composable
-private fun SimpleValueEditor(kind: String, value: String, onValue: (String) -> Unit) {
+internal fun SimpleValueEditor(kind: String, value: String, onValue: (String) -> Unit) {
     when (kind) {
         "hotkey" -> OutlinedTextField(value, onValue, label = { Text("Keys, e.g. ctrl+shift+esc") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         "text" -> OutlinedTextField(value, onValue, label = { Text("Text to type") }, modifier = Modifier.fillMaxWidth())
@@ -397,6 +407,7 @@ private fun SimpleValueEditor(kind: String, value: String, onValue: (String) -> 
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
         )
         "remote" -> RemotePicker(value, onValue)
+        "ha" -> HaActionEditor(value, onValue)
         else -> Unit
     }
 }

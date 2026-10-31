@@ -508,6 +508,9 @@ class HelmConnection(
     /** Phase 4 anywhere access (`p4`, §12): relay config, `wol.send`, `gy` input. */
     val supportsPhase4: Boolean get() = Features.P4 in hostFeatures
 
+    /** Phase 5 extras (`p5`, §13): recording, terminal, pen, notifications, plugins, triggers, HA. */
+    val supportsPhase5: Boolean get() = Features.P5 in hostFeatures
+
     /**
      * Sends a fire-and-forget input frame (`{"type":"in","k":…}`, §9.1): no id, no reply.
      * Returns false when not connected or the socket is closing.

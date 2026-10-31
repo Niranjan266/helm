@@ -7,6 +7,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
+/** `pn` frame state (§13). */
+enum class PenState(val wire: String) { HOVER("hover"), DOWN("down"), UP("up") }
+
 /** Mouse buttons for `mb` frames (§9.1). */
 enum class MouseButton(val wire: String) { LEFT("left"), RIGHT("right"), MIDDLE("middle"), X1("x1"), X2("x2") }
 
@@ -41,6 +44,31 @@ sealed interface InputFrame {
         override fun toJson() = frame(kind) {
             put("dx", round2(dx))
             put("dy", round2(dy))
+        }
+    }
+
+    /**
+     * Phase 5 pen sample (§13 `pn`): [x], [y] in 0..1 of the streamed monitor, [pressure] 0..1,
+     * tilt in degrees -90..90 (x: right is positive, y: towards the user is positive).
+     */
+    data class Pen(
+        val x: Float,
+        val y: Float,
+        val pressure: Float,
+        val tiltX: Float,
+        val tiltY: Float,
+        val state: PenState,
+        val eraser: Boolean,
+    ) : InputFrame {
+        override val kind get() = "pn"
+        override fun toJson() = frame(kind) {
+            put("x", round4(x.coerceIn(0f, 1f)))
+            put("y", round4(y.coerceIn(0f, 1f)))
+            put("pressure", round4(if (state == PenState.DOWN) pressure.coerceIn(0f, 1f) else 0f))
+            put("tilt_x", round2(tiltX.coerceIn(-90f, 90f)))
+            put("tilt_y", round2(tiltY.coerceIn(-90f, 90f)))
+            put("state", state.wire)
+            put("eraser", eraser)
         }
     }
 

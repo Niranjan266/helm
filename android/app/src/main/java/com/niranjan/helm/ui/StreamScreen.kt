@@ -58,6 +58,9 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
     var showKeyboard by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
     val absBatcher = remember { AbsMoveBatcher() }
+    val extras: ExtrasViewModel = viewModel()
+    val extrasUi by extras.ui.collectAsStateWithLifecycle()
+    var penMode by remember { mutableStateOf(false) }
 
     // Stream only while this screen is visible and the app is in the foreground.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -116,6 +119,15 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 onResetView = { transform = transform.reset() },
                 onHide = { showControls = false },
             )
+            if (remoteUi.phase5) {
+                ExtrasBar(
+                    ui = extrasUi,
+                    audio = settings.streamAudio,
+                    penMode = penMode,
+                    onPen = { penMode = it },
+                    onRecord = { extras.toggleRecording(settings.streamAudio) },
+                )
+            }
         }
         Box(
             Modifier
@@ -124,22 +136,27 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 .clipToBounds()
                 .background(Color.Black)
                 .onSizeChanged { s: IntSize -> transform = transform.withView(s.width.toFloat(), s.height.toFloat()) }
-                .streamGestures(
-                    direct = settings.streamDirectTouch,
-                    speed = settings.touchpadSpeed,
-                    haptics = settings.haptics,
-                    remote = remote,
-                    abs = absBatcher,
-                    transform = { transform },
-                    setTransform = { transform = it },
-                    onThreeFingerTap = { showControls = !showControls },
+                .then(
+                    // Pen mode: the stylus overlay owns input; finger gestures are off.
+                    if (penMode && remoteUi.phase5) Modifier else Modifier.streamGestures(
+                        direct = settings.streamDirectTouch,
+                        speed = settings.touchpadSpeed,
+                        haptics = settings.haptics,
+                        remote = remote,
+                        abs = absBatcher,
+                        transform = { transform },
+                        setTransform = { transform = it },
+                        onThreeFingerTap = { showControls = !showControls },
+                    ),
                 ),
         ) {
             VideoSurface(vm, ui, transform)
             CursorOverlay(vm, ui, transform, remoteUi.monitors.firstOrNull { it.id == ui.monitor?.id }?.width
                 ?: remoteUi.monitors.firstOrNull { it.isPrimary }?.width)
+            if (penMode && remoteUi.phase5) PenOverlay({ transform }, remote::send, Modifier.fillMaxSize())
             if (settings.streamShowStats) StatsOverlay(ui, Modifier.align(Alignment.TopStart).padding(8.dp))
             if (!ui.streaming) StatusOverlay(ui, onRetry = { vm.setActive(false); vm.setActive(true) }, Modifier.align(Alignment.Center))
+            if (!showControls && extrasUi.recording != null) RecordingDot(extrasUi, Modifier.align(Alignment.TopStart).padding(8.dp))
             if (!showControls) {
                 FilledTonalButton(
                     onClick = { showControls = true },
@@ -246,4 +263,47 @@ private fun StatusOverlay(ui: StreamUi, onRetry: () -> Unit, modifier: Modifier)
         ui.error?.let { Text(it, color = Color(0xFFFFB4AB), style = MaterialTheme.typography.bodySmall) }
         Button(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) { Text("Retry now") }
     }
+}
+
+/** Phase 5 controls under the stream controls: PC screen recording and pen mode. */
+@Composable
+private fun ExtrasBar(ui: ExtrasUi, audio: Boolean, penMode: Boolean, onPen: (Boolean) -> Unit, onRecord: () -> Unit) {
+    androidx.compose.foundation.layout.Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val rec = ui.recording != null
+        androidx.compose.material3.FilterChip(
+            selected = rec,
+            enabled = !ui.recordBusy,
+            onClick = onRecord,
+            label = { Text(if (rec) "Stop recording" else if (audio) "Record (with sound)" else "Record") },
+        )
+        if (rec) RecordingDot(ui, Modifier)
+        androidx.compose.material3.FilterChip(
+            selected = penMode,
+            onClick = { onPen(!penMode) },
+            label = { Text(if (penMode) "Pen mode (fingers off)" else "Pen") },
+        )
+    }
+}
+
+/** Red dot + elapsed time while the PC records. */
+@Composable
+private fun RecordingDot(ui: ExtrasUi, modifier: Modifier) {
+    var now by remember { mutableStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(ui.recordingSince) {
+        while (isActive) {
+            now = android.os.SystemClock.elapsedRealtime()
+            delay(500)
+        }
+    }
+    val secs = ((now - ui.recordingSince) / 1000).coerceAtLeast(0)
+    Text(
+        "● REC ${secs / 60}:${"%02d".format(secs % 60)}",
+        color = Color(0xFFFF5252),
+        style = MaterialTheme.typography.labelMedium,
+        modifier = modifier.background(Color(0x99000000), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }

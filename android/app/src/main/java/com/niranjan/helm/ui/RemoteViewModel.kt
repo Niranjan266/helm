@@ -82,6 +82,8 @@ data class RemoteUi(
     val phase3: Boolean = false,
     /** Agent advertises Phase 4 (`p4`). */
     val phase4: Boolean = false,
+    /** Phase 5 extras (§13). */
+    val phase5: Boolean = false,
     /** `deck.state{id,on}` per button. */
     val deckOn: Map<String, Boolean> = emptyMap(),
     /** `deck.widget{id,text}` per button. */
@@ -188,7 +190,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun onReady(c: HelmConnection) = coroutineScope {
         val p1 = c.supportsPhase1
-        _ui.update { it.copy(phase1 = p1, phase3 = c.supportsPhase3, phase4 = c.supportsPhase4) }
+        _ui.update { it.copy(phase1 = p1, phase3 = c.supportsPhase3, phase4 = c.supportsPhase4, phase5 = c.supportsPhase5) }
         launch { c.events.collect { handleEvent(it) } }
         if (!p1) return@coroutineScope
         launch { refreshDock() }
