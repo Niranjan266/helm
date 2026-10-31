@@ -68,6 +68,37 @@ class ScrollBatcher {
     }
 }
 
+/** Keeps only the newest absolute position (`ma`) between frames. */
+class AbsMoveBatcher {
+    private var pending: InputFrame.AbsMove? = null
+    private var lastSent: InputFrame.AbsMove? = null
+
+    @Synchronized
+    fun set(x: Float, y: Float) {
+        if (!x.isFinite() || !y.isFinite()) return
+        pending = InputFrame.AbsMove(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
+    }
+
+    /** The pending move, or null if nothing new (or the same as last sent). */
+    @Synchronized
+    fun drain(): InputFrame.AbsMove? {
+        val p = pending ?: return null
+        pending = null
+        if (p == lastSent) return null
+        lastSent = p
+        return p
+    }
+
+    /** Hands out the pending move now (e.g. right before a button press). */
+    @Synchronized
+    fun take(): InputFrame.AbsMove? {
+        val p = pending ?: return null
+        pending = null
+        lastSent = p
+        return p
+    }
+}
+
 /**
  * Turns edits of the phone's text box into input frames: appended text -> `tx`, deleted
  * characters -> Backspace presses. A replaced tail is deleted, then the new tail is typed.

@@ -181,6 +181,16 @@ stream runs at ≥ 720p30; relay logs show no plaintext.
 
 ---
 
+## Phase 5b — remaining features + test-everything ◐ (started 2026-10-31)
+
+| Step | Work | Where |
+|---|---|---|
+| A | MP4 recording (H.264 + AAC via MF sink writer), pen input (`InjectSyntheticPointerInput`), Windows toasts for phone notifications | `host/crates/helm-win-record`, `helm-win-pen`, `helm-win-notify` |
+| B | ConPTY terminal sessions; phone-as-webcam spike (`MFCreateVirtualCamera`) | `host/crates/helm-win-terminal`, `helm-win-vcam` |
+| C | WASM plugin host (wasmtime, capability API) + trigger engine (time, app start, phone connect, Wi-Fi) + Home Assistant client | `host/crates/helm-plugins` |
+| D | `scripts/test-all.ps1` (every crate, agent, relay, Android, real E2E), GitHub Actions CI (tests only), `scripts/release.ps1` | `scripts/`, `.github/` |
+| E | After merges: integrate A–C into agent + Android (protocol §14), security review, full test run, real E2E | agent, android |
+
 ## Release process (all phases)
 - Version per phase: `0.1.x` = Phase 0/1, `0.2` = Phase 2, … `1.0` after Phase 4.
 - GitHub Actions only runs tests (open-source contributors need CI); release builds are made

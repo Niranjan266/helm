@@ -20,6 +20,9 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.Response
 import okhttp3.WebSocket
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
@@ -82,7 +85,64 @@ class FakeAgent(
     val received = CopyOnWriteArrayList<JsonObject>()
     var tokenUsed = false
 
-    fun listener(): WebSocketListener = object : WebSocketListener() {
+    // ---- Phase 2 stream (§10) -----------------------------------------------------------
+
+    /** `stream.start` params received, in order. */
+    val streamStarts = CopyOnWriteArrayList<JsonObject>()
+
+    /** `stream.stats` params received, in order. */
+    val streamStats = CopyOnWriteArrayList<JsonObject>()
+
+    /** Other stream control methods received (`stream.stop`, `stream.idr`, `stream.config`). */
+    val streamCalls = CopyOnWriteArrayList<String>()
+
+    /** Tokens accepted by `stream.open` on the `/stream` socket. */
+    val streamOpened = CopyOnWriteArrayList<String>()
+
+    /** Paths of every WebSocket the agent accepted (`/ws`, `/stream`). */
+    val paths = CopyOnWriteArrayList<String>()
+
+    // ---- Phase 3 / 4 (§11-§12) ---------------------------------------------------------
+
+    /** Every p3/p4 call received: method + params. */
+    val p3Calls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
+
+    @Volatile var alertsJson: JsonObject = buildJsonObject { putJsonArray("rules") {} }
+    @Volatile var profilesJson: JsonObject = buildJsonObject { putJsonArray("profiles") {} }
+    @Volatile var relayJson: JsonObject = buildJsonObject { put("enabled", false); put("url", "") }
+
+    /** Fake file system for `fs.*`: path -> children (names ending in `\` are folders). */
+    val fs = ConcurrentHashMap<String, MutableList<String>>()
+
+    /** Tiers set via `devices.set_tier`. */
+    val tiers = ConcurrentHashMap<String, String>()
+
+    /** `system.info.relay`, when set. */
+    @Volatile var infoRelay: JsonObject? = null
+
+    private val streamTokens = ConcurrentHashMap<String, Boolean>()
+    private val streamSockets = CopyOnWriteArrayList<WebSocket>()
+
+    /** Closes every open `/stream` socket (the agent going away). */
+    fun closeStreams() {
+        for (ws in streamSockets) ws.close(1001, "going away")
+        streamSockets.clear()
+    }
+
+    /** Binary frames sent right after a valid `stream.open`. */
+    @Volatile
+    var streamFrames: List<ByteArray> = emptyList()
+
+    /** Routes `/stream` to the stream listener and everything else to the control listener. */
+    fun dispatcher(): Dispatcher = object : Dispatcher() {
+        override fun dispatch(request: RecordedRequest): MockResponse {
+            val path = request.path ?: "/ws"
+            paths += path
+            return MockResponse().withWebSocketUpgrade(listener(stream = path == "/stream"))
+        }
+    }
+
+    fun listener(stream: Boolean = false): WebSocketListener = object : WebSocketListener() {
         private lateinit var nonce: String
         private var deviceId: String? = null
         private var authed = false
@@ -125,6 +185,22 @@ class FakeAgent(
         override fun onMessage(webSocket: WebSocket, text: String) {
             val msg = Json.parseToJsonElement(text) as JsonObject
             received += msg
+            if (stream) {
+                when (msg.s("type")) {
+                    "pair" -> error(webSocket, "bad_message", "pairing is not allowed on /stream")
+                    "auth" -> onAuth(webSocket, msg)
+                    "stream.open" -> {
+                        if (!authed) return error(webSocket, "bad_message", "not authenticated")
+                        val token = msg.s("token")
+                        if (token == null || streamTokens.remove(token) == null) return error(webSocket, "bad_token", "bad stream token")
+                        streamOpened += token
+                        streamSockets += webSocket
+                        for (f in streamFrames) webSocket.send(f.toByteString())
+                    }
+                    else -> error(webSocket, "bad_message", "unexpected on /stream")
+                }
+                return
+            }
             when (msg.s("type")) {
                 "pair" -> onPair(webSocket, msg)
                 "auth" -> onAuth(webSocket, msg)
@@ -166,7 +242,7 @@ class FakeAgent(
         private fun ready(ws: WebSocket, id: String) {
             deviceId = id
             authed = true
-            sockets += ws
+            if (!stream) sockets += ws
             ws.send(
                 buildJsonObject {
                     put("type", "ready")
@@ -201,6 +277,7 @@ class FakeAgent(
                     put("os", "Windows 11 Test")
                     put("agent_version", "0.1.0-test")
                     put("uptime_s", 1234)
+                    infoRelay?.let { put("relay", it) }
                 })
                 "devices.list" -> ok(ws, id, buildJsonObject {
                     putJsonArray("devices") {
@@ -286,6 +363,32 @@ class FakeAgent(
                     )
                 }
                 "test.close" -> ws.close(1000, "bye")
+                "stream.start" -> {
+                    streamStarts += params
+                    val token = "st_" + ByteArray(12).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+                    streamTokens[token] = true
+                    ok(ws, id, buildJsonObject {
+                        put("token", token)
+                        put("width", (params["max_width"] as? JsonPrimitive)?.longOrNull ?: 1280)
+                        put("height", (params["max_height"] as? JsonPrimitive)?.longOrNull ?: 720)
+                        put("fps", (params["fps"] as? JsonPrimitive)?.longOrNull ?: 30)
+                        put("codec", "h264")
+                        put("encoder", "software")
+                    })
+                }
+                "stream.stats" -> {
+                    streamStats += params
+                    ok(ws, id, JsonObject(emptyMap()))
+                }
+                "stream.stop", "stream.idr", "stream.config" -> {
+                    streamCalls += msg.s("method")!!
+                    ok(ws, id, JsonObject(emptyMap()))
+                }
+                in P3_METHODS -> {
+                    p3Calls += msg.s("method")!! to params
+                    val r = phase3(ws, msg.s("method")!!, params)
+                    if (r == null) reqError(ws, id, "bad_params", "bad params") else ok(ws, id, r)
+                }
                 else -> ws.send(
                     buildJsonObject {
                         put("type", "res")
@@ -297,6 +400,106 @@ class FakeAgent(
                         }
                     }.toString(),
                 )
+            }
+        }
+
+        private fun event(ws: WebSocket, name: String, data: JsonObject) {
+            ws.send(buildJsonObject { put("type", "event"); put("name", name); put("data", data) }.toString())
+        }
+
+        /** Phase 3/4 methods; null = `bad_params`. Events are sent after the reply. */
+        private fun phase3(ws: WebSocket, method: String, p: JsonObject): JsonObject? {
+            val empty = JsonObject(emptyMap())
+            fun num(k: String) = (p[k] as? JsonPrimitive)?.longOrNull
+            return when (method) {
+                "stats.subscribe" -> {
+                    val iv = num("interval_ms") ?: return null
+                    if (iv < 500) return null
+                    Thread {
+                        Thread.sleep(50)
+                        for (i in 1..2) event(ws, "stats.tick", statsSample(i))
+                    }.start()
+                    empty
+                }
+                "stats.unsubscribe" -> empty
+                "alerts.get" -> alertsJson
+                "alerts.set" -> {
+                    alertsJson = buildJsonObject { put("rules", p["rules"] ?: return null) }
+                    Thread {
+                        Thread.sleep(50)
+                        event(ws, "alert", buildJsonObject { put("id", "cpu"); put("firing", true); put("value", 97.5) })
+                    }.start()
+                    empty
+                }
+                "process.list" -> buildJsonObject {
+                    putJsonArray("processes") {
+                        addJsonObject { put("pid", 4321); put("name", "chrome.exe"); put("exe", "C:\\chrome.exe"); put("cpu_pct", 12.5); put("ram_bytes", 500_000_000) }
+                        addJsonObject { put("pid", 99); put("name", "idle.exe"); put("cpu_pct", 0.1); put("ram_bytes", 1000) }
+                    }
+                }
+                "process.kill" -> if (num("pid") == 0L || num("pid") == null) null else empty
+                "process.priority" -> if (p.s("level") in listOf("idle", "below_normal", "normal", "above_normal", "high")) empty else null
+                "audio.sessions" -> buildJsonObject {
+                    putJsonArray("sessions") {
+                        addJsonObject { put("id", "{s-1}"); put("name", "Spotify"); put("pid", 77); put("level", 0.5); put("muted", false) }
+                    }
+                }
+                "audio.session.set" -> if (p["id"] == null) null else empty
+                "windows.move" -> if (num("monitor_index") == null) null else empty
+                "windows.snap" -> if (p.s("pos") in listOf("left", "right", "maximize", "restore")) empty else null
+                "desktop.switch" -> if (p.s("dir") in listOf("next", "prev", "new", "close")) empty else null
+                "profiles.get" -> profilesJson
+                "profiles.set" -> {
+                    profilesJson = buildJsonObject { put("profiles", p["profiles"] ?: return null) }
+                    Thread {
+                        Thread.sleep(50)
+                        event(ws, "profile.active", buildJsonObject { put("id", "games") })
+                    }.start()
+                    empty
+                }
+                "fs.list" -> {
+                    val path = p.s("path") ?: return null
+                    val kids = fs[path] ?: return null
+                    buildJsonObject {
+                        putJsonArray("entries") {
+                            for (k in kids) addJsonObject {
+                                put("name", k.trimEnd('\\'))
+                                put("is_dir", k.endsWith("\\"))
+                                put("size", if (k.endsWith("\\")) 0 else 10)
+                                put("modified_ms", 1_700_000_000_000)
+                            }
+                        }
+                    }
+                }
+                "fs.mkdir" -> {
+                    val path = p.s("path") ?: return null
+                    val parent = PcPath.parent(path)
+                    fs.getOrPut(parent) { mutableListOf() } += PcPath.name(path) + "\\"
+                    fs[path] = mutableListOf()
+                    empty
+                }
+                "fs.delete" -> {
+                    val path = p.s("path") ?: return null
+                    val removed = fs[PcPath.parent(path)]?.removeIf { it.trimEnd('\\') == PcPath.name(path) } == true
+                    if (removed) empty else null
+                }
+                "fs.open" -> if (p.s("path").isNullOrEmpty()) null else empty
+                "devices.set_tier" -> {
+                    val d = p.s("device_id") ?: return null
+                    val t = p.s("tier")?.takeIf { it in listOf("viewer", "remote", "admin") } ?: return null
+                    tiers[d] = t
+                    empty
+                }
+                "audit.list" -> buildJsonObject {
+                    putJsonArray("lines") { repeat((num("limit") ?: 0).toInt().coerceAtMost(3)) { add(JsonPrimitive("line $it")) } }
+                }
+                "relay.get" -> relayJson
+                "relay.set" -> {
+                    relayJson = buildJsonObject { put("enabled", p["enabled"] ?: return null); put("url", p["url"] ?: return null) }
+                    empty
+                }
+                "wol.send" -> if (p.s("mac")?.length == 17) empty else null
+                else -> null
             }
         }
 
@@ -338,6 +541,34 @@ class FakeAgent(
     }
 
     companion object {
+        val P3_METHODS = setOf(
+            "stats.subscribe", "stats.unsubscribe", "alerts.get", "alerts.set", "process.list", "process.kill",
+            "process.priority", "audio.sessions", "audio.session.set", "windows.move", "windows.snap",
+            "desktop.switch", "profiles.get", "profiles.set", "fs.list", "fs.delete", "fs.mkdir", "fs.open",
+            "devices.set_tier", "audit.list", "relay.get", "relay.set", "wol.send",
+        )
+
+        /** A `helm-win-sysmon` `Stats` snapshot. */
+        fun statsSample(i: Int): JsonObject = buildJsonObject {
+            put("timestamp_ms", 1_700_000_000_000L + i * 1000)
+            put("interval_ms", 1000)
+            put("cpu_total", 10.0 * i)
+            putJsonArray("cpu_per_core") { add(JsonPrimitive(5.0)); add(JsonPrimitive(15.0 * i)) }
+            put("cpu_temp_c", kotlinx.serialization.json.JsonNull)
+            put("ram_used", 4_000_000_000L)
+            put("ram_total", 16_000_000_000L)
+            put("swap_used", 0)
+            put("swap_total", 0)
+            putJsonArray("disks") {
+                addJsonObject {
+                    put("mount", "C:\\"); put("label", "OS"); put("used", 750L); put("total", 1000L)
+                    put("read_bps", 100); put("write_bps", 200); put("removable", false)
+                }
+            }
+            putJsonArray("net") { addJsonObject { put("name", "Wi-Fi"); put("rx_bps", 1000); put("tx_bps", 500); put("rx_total", 1); put("tx_total", 1) } }
+            putJsonArray("gpu") { addJsonObject { put("name", "GPU0"); put("load_pct", 33.0); put("vram_used", 1); put("vram_total", 2); put("temp_c", kotlinx.serialization.json.JsonNull) } }
+        }
+
         fun JsonObject.s(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
 
         fun sha256Hex(b: ByteArray): String =

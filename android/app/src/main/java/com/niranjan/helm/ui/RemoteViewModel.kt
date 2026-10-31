@@ -78,6 +78,14 @@ data class RemoteUi(
     val transfer: TransferUi? = null,
     val clipboardWatch: Boolean = false,
     val pcClipImage: Bitmap? = null,
+    /** Agent advertises Phase 3 (`p3`). */
+    val phase3: Boolean = false,
+    /** Agent advertises Phase 4 (`p4`). */
+    val phase4: Boolean = false,
+    /** `deck.state{id,on}` per button. */
+    val deckOn: Map<String, Boolean> = emptyMap(),
+    /** `deck.widget{id,text}` per button. */
+    val deckText: Map<String, String> = emptyMap(),
 )
 
 /** Supplies app icons to composables. */
@@ -111,6 +119,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     private val motion = MotionBatcher()
     private val scroll = ScrollBatcher()
+    private val gyro = com.niranjan.helm.core.GyroMouse()
     private var dragLocked = false
     private val volumeTarget = MutableStateFlow<Float?>(null)
     private val brightnessTarget = MutableStateFlow<Pair<String, Int>?>(null)
@@ -142,6 +151,9 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    private fun kotlinx.serialization.json.JsonElement?.strOrNull(): String? =
+        (this as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
 
     private fun message(text: String) {
         _messages.tryEmit(text)
@@ -176,7 +188,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun onReady(c: HelmConnection) = coroutineScope {
         val p1 = c.supportsPhase1
-        _ui.update { it.copy(phase1 = p1) }
+        _ui.update { it.copy(phase1 = p1, phase3 = c.supportsPhase3, phase4 = c.supportsPhase4) }
         launch { c.events.collect { handleEvent(it) } }
         if (!p1) return@coroutineScope
         launch { refreshDock() }
@@ -209,6 +221,16 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             "input.textFocus" -> _textFocus.tryEmit(ev.data["focused"]?.toString() == "true")
             "dock.changed" -> viewModelScope.launch { refreshDock() }
             "deck.changed" -> viewModelScope.launch { refreshDeck() }
+            "deck.state" -> {
+                val id = ev.data["id"].strOrNull() ?: return
+                val on = (ev.data["on"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+                _ui.update { it.copy(deckOn = it.deckOn + (id to on)) }
+            }
+            "deck.widget" -> {
+                val id = ev.data["id"].strOrNull() ?: return
+                val text = ev.data["text"].strOrNull() ?: ""
+                _ui.update { it.copy(deckText = it.deckText + (id to text)) }
+            }
             "power.scheduled" -> _ui.update { it.copy(power = PowerSchedule.fromHolder(ev.data)) }
             "clipboard.changed" -> if (_ui.value.clipboardWatch) {
                 val text = (ev.data["text"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
@@ -340,7 +362,15 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         val c = conn ?: return
         motion.drain()?.let { c.sendInput(it) }
         scroll.drain()?.let { c.sendInput(it) }
+        gyro.drain()?.let { c.sendInput(it) }
     }
+
+    /** Gyro air mouse (§12 `gy`, p4 only): angular rates in rad/s. */
+    fun gyroSample(rateX: Float, rateZ: Float, dtS: Float, speed: Float) {
+        if (_ui.value.phase4) gyro.add(rateX, rateZ, dtS, speed)
+    }
+
+    fun gyroReset() = gyro.reset()
 
     fun click(button: MouseButton) {
         flushInput()
@@ -366,7 +396,12 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     val isDragLocked: Boolean get() = dragLocked
 
-    fun setTouchpadSpeed(v: Float) = controller.settings.update { it.copy(touchpadSpeed = v) }
+    /** Saves to this PC's own speed when it has one (per-PC settings), else the global one. */
+    fun setTouchpadSpeed(v: Float) {
+        val id = controller.session.value?.hostId
+        if (id != null && controller.prefsFor(id).touchpadSpeed != null) controller.updatePcPrefs(id) { it.copy(touchpadSpeed = v) }
+        else controller.settings.update { it.copy(touchpadSpeed = v) }
+    }
 
     // ---- Media, audio, brightness, power ------------------------------------------------
 

@@ -14,11 +14,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.Slider
+import com.niranjan.helm.core.PcPrefs
+import com.niranjan.helm.core.StreamPreset
 import com.niranjan.helm.device.Settings
 import com.niranjan.helm.device.ThemeMode
 
 @Composable
-fun SettingsScreen(settings: Settings, onSettings: ((Settings) -> Settings) -> Unit, pcDetails: @Composable () -> Unit) {
+fun SettingsScreen(
+    settings: Settings,
+    onSettings: ((Settings) -> Settings) -> Unit,
+    pcDetails: @Composable () -> Unit,
+    pcPrefs: PcPrefs? = null,
+    onPcPrefs: ((PcPrefs) -> PcPrefs) -> Unit = {},
+) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionCard("This phone") {
             ToggleRow("Keep screen on while the Dock is open", settings.keepScreenOnInDock) { v -> onSettings { it.copy(keepScreenOnInDock = v) } }
@@ -32,6 +42,26 @@ fun SettingsScreen(settings: Settings, onSettings: ((Settings) -> Settings) -> U
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(4, 6, 8).forEach { n ->
                     FilterChip(selected = settings.dockPageSize == n, onClick = { onSettings { it.copy(dockPageSize = n) } }, label = { Text("$n") })
+                }
+            }
+        }
+        if (pcPrefs != null) {
+            SectionCard("This PC on this phone") {
+                ToggleRow("Use the relay when not on the same network", pcPrefs.useRelay) { v -> onPcPrefs { it.copy(useRelay = v) } }
+                ToggleRow("Notify me about this PC's alerts", pcPrefs.notifyAlerts) { v -> onPcPrefs { it.copy(notifyAlerts = v) } }
+                ToggleRow("Confirm admin actions with fingerprint or screen lock", pcPrefs.biometricAdmin) { v -> onPcPrefs { it.copy(biometricAdmin = v) } }
+                ToggleRow("Own touchpad speed for this PC", pcPrefs.touchpadSpeed != null) { v ->
+                    onPcPrefs { it.copy(touchpadSpeed = if (v) settings.touchpadSpeed else null) }
+                }
+                pcPrefs.touchpadSpeed?.let { sp ->
+                    Slider(value = sp, onValueChange = { v -> onPcPrefs { it.copy(touchpadSpeed = v) } }, valueRange = 0.4f..3f)
+                }
+                Text("Screen quality for this PC")
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = pcPrefs.streamPreset == null, onClick = { onPcPrefs { it.copy(streamPreset = null) } }, label = { Text("Default") })
+                    StreamPreset.entries.forEach { p ->
+                        FilterChip(selected = pcPrefs.streamPreset == p.name, onClick = { onPcPrefs { it.copy(streamPreset = p.name) } }, label = { Text(p.label) })
+                    }
                 }
             }
         }

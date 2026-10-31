@@ -1,6 +1,11 @@
 package com.niranjan.helm.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,8 +14,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -53,13 +66,21 @@ import com.niranjan.helm.core.ConnectionState
 import com.niranjan.helm.device.Settings
 import kotlinx.coroutines.launch
 
-enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean) {
+enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean, val p3: Boolean = false) {
     DOCK("Dock", Icons.Filled.Home, true),
     APPS("Apps", Icons.Filled.Search, true),
     TOUCHPAD("Touchpad", Icons.Filled.Create, true),
+    SCREEN("Screen", Icons.Filled.AccountBox, true),
     MEDIA("Media & Controls", Icons.Filled.PlayArrow, true),
     DECK("Deck", Icons.Filled.Star, true),
+    MONITOR("Monitor & alerts", Icons.Filled.Info, false, p3 = true),
+    TASKS("Task manager", Icons.Filled.Build, false, p3 = true),
+    MIXER("Volume mixer", Icons.Filled.Notifications, false, p3 = true),
+    WINDOWS("Windows & desktops", Icons.Filled.List, false, p3 = true),
+    PROFILES("Profiles", Icons.Filled.Person, false, p3 = true),
+    PC_FILES("PC files", Icons.Filled.Email, false, p3 = true),
     FILES("Files & sharing", Icons.Filled.Share, false),
+    SECURITY("Devices & security", Icons.Filled.Lock, false),
     SETTINGS("Settings", Icons.Filled.Settings, false),
 }
 
@@ -81,6 +102,8 @@ fun RemoteShell(
     snackbar: SnackbarHostState,
     main: MainViewModel,
     remote: RemoteViewModel,
+    power: PowerViewModel,
+    otherPcs: List<com.niranjan.helm.core.SavedPc>,
     screen: Screen,
     onScreen: (Screen) -> Unit,
 ) {
@@ -101,6 +124,16 @@ fun RemoteShell(
     }
 
     val drawer = rememberDrawerState(DrawerValue.Closed)
+    val remoteUi by remote.ui.collectAsStateWithLifecycle()
+    val ready = session.connection.readyInfo
+    val linkBadge = remember(ready) {
+        when {
+            ready == null -> null
+            ready.viaRelay -> "Relay"
+            com.niranjan.helm.core.UsbTether.isOverUsb(ready.endpoint.host, com.niranjan.helm.device.NetIfaces.local()) -> "USB"
+            else -> null
+        }
+    }
     val scope = rememberCoroutineScope()
     val config = LocalConfiguration.current
     val landscape = config.screenWidthDp > config.screenHeightDp
@@ -121,11 +154,11 @@ fun RemoteShell(
 
     ModalNavigationDrawer(
         drawerState = drawer,
-        gesturesEnabled = drawer.isOpen || screen != Screen.TOUCHPAD,
+        gesturesEnabled = drawer.isOpen || (screen != Screen.TOUCHPAD && screen != Screen.SCREEN),
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(Modifier.verticalScroll(rememberScrollState())) {
                 Text(session.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
-                Screen.entries.forEach { s ->
+                Screen.entries.filter { !it.p3 || remoteUi.phase3 }.forEach { s ->
                     NavigationDrawerItem(
                         label = { Text(s.label) },
                         icon = { Icon(s.icon, contentDescription = null) },
@@ -133,6 +166,21 @@ fun RemoteShell(
                         onClick = { go(s) },
                         modifier = Modifier.padding(horizontal = 12.dp),
                     )
+                }
+                if (otherPcs.isNotEmpty()) {
+                    Text("Switch PC", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 4.dp))
+                    otherPcs.forEach { pc ->
+                        NavigationDrawerItem(
+                            label = { Text(pc.name) },
+                            icon = null,
+                            selected = false,
+                            onClick = { scope.launch { drawer.close() }; main.connect(pc) },
+                            badge = if (remoteUi.phase4 && pc.macs.isNotEmpty()) {
+                                { TextButton(onClick = { main.wakeVia(pc) }) { Text("Wake") } }
+                            } else null,
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 NavigationDrawerItem(
@@ -149,7 +197,12 @@ fun RemoteShell(
             topBar = {
                 if (!landscape) {
                     TopAppBar(
-                        title = { Text(if (screen == Screen.DOCK) session.name else screen.label) },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(if (screen == Screen.DOCK) session.name else screen.label)
+                                linkBadge?.let { LinkBadge(it) }
+                            }
+                        },
                         navigationIcon = {
                             IconButton(onClick = { scope.launch { drawer.open() } }) {
                                 Icon(Icons.Filled.Menu, contentDescription = "All screens")
@@ -195,8 +248,7 @@ fun RemoteShell(
                 }
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     Column(Modifier.fillMaxSize()) {
-                        val ui by remote.ui.collectAsStateWithLifecycle()
-                        if (!ui.phase1) {
+                        if (!remoteUi.phase1) {
                             HintText(
                                 "This PC's Helm agent is older and does not offer remote control yet. Update Helm on the PC.",
                                 Modifier.fillMaxWidth().padding(12.dp),
@@ -204,15 +256,25 @@ fun RemoteShell(
                         }
                         Box(Modifier.weight(1f).fillMaxWidth()) {
                             when (screen) {
+                                Screen.MONITOR -> MonitorScreen(power)
+                                Screen.TASKS -> TasksScreen(power)
+                                Screen.MIXER -> MixerScreen(power)
+                                Screen.WINDOWS -> WindowsScreen(remote, power)
+                                Screen.PROFILES -> ProfilesScreen(remote, power)
+                                Screen.PC_FILES -> PcFilesScreen(remote, power)
+                                Screen.SECURITY -> SecurityScreen(main, power)
                                 Screen.DOCK -> DockScreen(remote, settings, landscape, onOpenApps = { go(Screen.APPS) })
                                 Screen.APPS -> AppsScreen(remote)
                                 Screen.TOUCHPAD -> TouchpadScreen(remote, settings)
+                                Screen.SCREEN -> StreamScreen(remote, settings)
                                 Screen.MEDIA -> MediaScreen(remote, landscape)
                                 Screen.DECK -> DeckScreen(remote, settings)
                                 Screen.FILES -> FilesScreen(remote)
                                 Screen.SETTINGS -> SettingsScreen(
                                     settings = settings,
                                     onSettings = main::updateSettings,
+                                    pcPrefs = main.prefsFor(session.hostId),
+                                    onPcPrefs = { change -> main.updatePcPrefs(session.hostId, change) },
                                     pcDetails = {
                                         PcDetails(
                                             session, sessionUi, main::ping, main::refreshInfo, main::refreshDevices,
@@ -232,4 +294,17 @@ fun RemoteShell(
     if (confirmForget) {
         ForgetDialog(session.name, onConfirm = { confirmForget = false; main.forgetCurrent() }, onDismiss = { confirmForget = false })
     }
+}
+
+@Composable
+private fun LinkBadge(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onTertiaryContainer,
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .background(MaterialTheme.colorScheme.tertiaryContainer, androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }

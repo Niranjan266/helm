@@ -145,11 +145,32 @@ sealed interface DeckAction {
     data class Media(val action: String) : DeckAction
     data class VolumeStep(val step: Double) : DeckAction
     data class Delay(val ms: Long) : DeckAction
+
+    /** Phase 3 (§11): a sequence of actions (max [MAX_MACRO_STEPS]), `delay_ms` allowed inside. */
+    data class Macro(val steps: List<DeckAction>) : DeckAction
+
+    /** Phase 3: run [action] [times] times. */
+    data class Repeat(val times: Int, val action: DeckAction) : DeckAction
+
+    /** Phase 3 app remote, e.g. `powerpoint.next` or `obs.scene:<name>`. */
+    data class Remote(val command: String) : DeckAction
     data class Unknown(val raw: JsonElement) : DeckAction
 
     companion object {
         val KINDS = listOf("hotkey", "text", "launch", "open", "media", "volume_step", "delay_ms")
+
+        /** Kinds only a `p3` agent understands. */
+        val P3_KINDS = listOf("macro", "repeat", "remote")
         val MEDIA_ACTIONS = listOf("toggle_play_pause", "play", "pause", "next", "previous", "stop")
+        val REMOTE_COMMANDS = listOf(
+            "powerpoint.next", "powerpoint.prev", "powerpoint.start", "powerpoint.end",
+            "browser.back", "browser.forward", "browser.tab_next", "browser.tab_prev", "browser.reload",
+            "obs.toggle_record", "obs.toggle_stream",
+        )
+        const val OBS_SCENE_PREFIX = "obs.scene:"
+        const val MAX_MACRO_STEPS = 50
+        val STATE_BINDS = listOf("mic_muted", "audio_muted", "media_playing")
+        val WIDGETS = listOf("cpu", "ram", "clock", "now_playing")
     }
 }
 
@@ -160,6 +181,10 @@ data class DeckButton(
     val color: String,
     val icon: String? = null,
     val action: DeckAction,
+    /** Phase 3 toggle binding (`state:{bind}`): `mic_muted`, `audio_muted` or `media_playing`. */
+    val stateBind: String? = null,
+    /** Phase 3 live widget: `cpu`, `ram`, `clock` or `now_playing`. */
+    val widget: String? = null,
 )
 
 /** `deck.get` / `deck.set` JSON. */
@@ -174,6 +199,18 @@ object DeckCodec {
             o.optStr("media")?.let { return DeckAction.Media(it) }
             o.optDouble("volume_step")?.let { return DeckAction.VolumeStep(it) }
             o.optLong("delay_ms")?.let { return DeckAction.Delay(it) }
+            o.optStr("remote")?.let { return DeckAction.Remote(it) }
+            // Macro / repeat are decoded only when every inner action is understood; otherwise
+            // the whole action is kept raw so a save never rewrites what we cannot represent.
+            (o["macro"] as? JsonArray)?.let { arr ->
+                val steps = arr.map { decodeAction(it) }
+                if (arr.size <= DeckAction.MAX_MACRO_STEPS && steps.none { it is DeckAction.Unknown }) return DeckAction.Macro(steps)
+            }
+            (o["repeat"] as? JsonObject)?.let { r ->
+                val times = r.optLong("times")
+                val inner = decodeAction(r["action"])
+                if (times != null && times in 1..1000 && inner !is DeckAction.Unknown) return DeckAction.Repeat(times.toInt(), inner)
+            }
         }
         return DeckAction.Unknown(o)
     }
@@ -186,8 +223,28 @@ object DeckCodec {
         is DeckAction.Media -> buildJsonObject { put("media", a.action) }
         is DeckAction.VolumeStep -> buildJsonObject { put("volume_step", a.step) }
         is DeckAction.Delay -> buildJsonObject { put("delay_ms", a.ms) }
+        is DeckAction.Remote -> buildJsonObject { put("remote", a.command) }
+        is DeckAction.Macro -> buildJsonObject {
+            put("macro", buildJsonArray { a.steps.take(DeckAction.MAX_MACRO_STEPS).forEach { add(encodeAction(it)) } })
+        }
+        is DeckAction.Repeat -> buildJsonObject {
+            put("repeat", buildJsonObject {
+                put("times", a.times)
+                put("action", encodeAction(a.action))
+            })
+        }
         is DeckAction.Unknown -> a.raw
     }
+
+    /** True when [a] (or a step inside it) needs a `p3` agent. */
+    fun needsPhase3(a: DeckAction): Boolean = when (a) {
+        is DeckAction.Macro, is DeckAction.Repeat, is DeckAction.Remote -> true
+        else -> false
+    }
+
+    /** Lenient: `widget:"cpu"` or `widget:{"widget":"cpu"}`. */
+    private fun widgetOf(o: JsonObject): String? =
+        o.optStr("widget") ?: (o["widget"] as? JsonObject)?.optStr("widget")
 
     fun decode(result: JsonObject): List<DeckButton> = result.objList("buttons").mapNotNull { o ->
         val id = o.optStr("id") ?: return@mapNotNull null
@@ -197,6 +254,8 @@ object DeckCodec {
             color = o.optStr("color") ?: DEFAULT_COLOR,
             icon = o.optStr("icon"),
             action = decodeAction(o["action"]),
+            stateBind = (o["state"] as? JsonObject)?.optStr("bind"),
+            widget = widgetOf(o),
         )
     }
 
@@ -209,6 +268,8 @@ object DeckCodec {
                 put("color", b.color)
                 b.icon?.let { put("icon", it) }
                 put("action", encodeAction(b.action))
+                b.stateBind?.let { put("state", buildJsonObject { put("bind", it) }) }
+                b.widget?.let { put("widget", it) }
             }
         })
     }

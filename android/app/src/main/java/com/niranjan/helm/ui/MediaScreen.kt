@@ -118,6 +118,7 @@ private fun NowPlaying(remote: RemoteViewModel) {
 
 @Composable
 private fun Controls(remote: RemoteViewModel) {
+    val gate = LocalAdminGate.current
     val ui by remote.ui.collectAsStateWithLifecycle()
     var confirm by remember { mutableStateOf<String?>(null) }
 
@@ -191,7 +192,7 @@ private fun Controls(remote: RemoteViewModel) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { remote.power(action, choice.takeIf { it > 0 }); confirm = null }) { Text(powerLabel(action)) }
+                TextButton(onClick = { confirm = null; gate("${powerLabel(action)} the PC") { remote.power(action, choice.takeIf { it > 0 }) } }) { Text(powerLabel(action)) }
             },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
         )

@@ -8,8 +8,16 @@ import kotlinx.serialization.json.put
 
 /** Typed calls for the Phase 1 methods (PROTOCOL.md §9.3) over one [HelmConnection]. */
 class HelmApi(val conn: HelmConnection) {
-    private suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 10_000) =
+    internal suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 10_000) =
         conn.request(method, params, timeoutMs)
+
+    /** Like [call], but only when the agent advertised [feature] in `hello` (else `unsupported`, nothing sent). */
+    internal suspend fun gated(feature: String, method: String, params: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 10_000): JsonObject {
+        if (feature !in conn.hostFeatures) {
+            throw HelmException(LocalCodes.UNSUPPORTED, "The PC agent does not offer $method (needs $feature).")
+        }
+        return conn.request(method, params, timeoutMs)
+    }
 
     private fun pngOf(r: JsonObject): ByteArray? = r.optStr("png")?.let {
         try {

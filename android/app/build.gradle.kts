@@ -71,6 +71,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation(libs.play.services.code.scanner)
+    implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment)
 
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)

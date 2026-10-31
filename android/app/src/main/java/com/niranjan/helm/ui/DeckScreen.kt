@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,7 +62,7 @@ fun parseColor(hex: String): Color = try {
     Color(0xFF3B82F6)
 }
 
-private fun kindOf(a: DeckAction): String = when (a) {
+internal fun kindOf(a: DeckAction): String = when (a) {
     is DeckAction.Hotkey -> "hotkey"
     is DeckAction.Text -> "text"
     is DeckAction.Launch -> "launch"
@@ -69,10 +70,14 @@ private fun kindOf(a: DeckAction): String = when (a) {
     is DeckAction.Media -> "media"
     is DeckAction.VolumeStep -> "volume_step"
     is DeckAction.Delay -> "delay_ms"
+    is DeckAction.Macro -> "macro"
+    is DeckAction.Repeat -> "repeat"
+    is DeckAction.Remote -> "remote"
     is DeckAction.Unknown -> "other"
 }
 
-private fun valueOf(a: DeckAction): String = when (a) {
+/** Editable text for a simple action (macro/repeat are edited structurally). */
+internal fun valueOf(a: DeckAction): String = when (a) {
     is DeckAction.Hotkey -> a.keys
     is DeckAction.Text -> a.text
     is DeckAction.Launch -> a.appId
@@ -80,10 +85,12 @@ private fun valueOf(a: DeckAction): String = when (a) {
     is DeckAction.Media -> a.action
     is DeckAction.VolumeStep -> a.step.toString()
     is DeckAction.Delay -> a.ms.toString()
+    is DeckAction.Remote -> a.command
+    is DeckAction.Macro, is DeckAction.Repeat -> ""
     is DeckAction.Unknown -> a.raw.toString()
 }
 
-private fun kindLabel(k: String) = when (k) {
+internal fun kindLabel(k: String) = when (k) {
     "hotkey" -> "Hotkey"
     "text" -> "Type text"
     "launch" -> "Launch app"
@@ -91,10 +98,21 @@ private fun kindLabel(k: String) = when (k) {
     "media" -> "Media"
     "volume_step" -> "Volume step"
     "delay_ms" -> "Delay"
+    "macro" -> "Macro"
+    "repeat" -> "Repeat"
+    "remote" -> "App remote"
     else -> "Other"
 }
 
-/** Builds an action from the editor fields, or null if the value is invalid. */
+private fun defaultValue(k: String) = when (k) {
+    "media" -> "toggle_play_pause"
+    "volume_step" -> "0.05"
+    "delay_ms" -> "250"
+    "remote" -> "powerpoint.next"
+    else -> ""
+}
+
+/** Builds a simple action from the editor fields, or null if the value is invalid. */
 private fun buildAction(kind: String, value: String, original: DeckAction?): DeckAction? = when (kind) {
     "hotkey" -> value.trim().takeIf { it.isNotEmpty() }?.let { DeckAction.Hotkey(it.lowercase()) }
     "text" -> value.takeIf { it.isNotEmpty() }?.let { DeckAction.Text(it) }
@@ -103,7 +121,37 @@ private fun buildAction(kind: String, value: String, original: DeckAction?): Dec
     "media" -> value.takeIf { it in DeckAction.MEDIA_ACTIONS }?.let { DeckAction.Media(it) }
     "volume_step" -> value.trim().toDoubleOrNull()?.takeIf { it in -1.0..1.0 && it != 0.0 }?.let { DeckAction.VolumeStep(it) }
     "delay_ms" -> value.trim().toLongOrNull()?.takeIf { it in 0..60_000 }?.let { DeckAction.Delay(it) }
+    "remote" -> value.trim().takeIf {
+        it in DeckAction.REMOTE_COMMANDS || (it.startsWith(DeckAction.OBS_SCENE_PREFIX) && it.length > DeckAction.OBS_SCENE_PREFIX.length)
+    }?.let { DeckAction.Remote(it) }
     else -> original as? DeckAction.Unknown
+}
+
+/** One step of a macro, or the action inside a repeat. */
+private data class StepDraft(val kind: String, val value: String) {
+    fun build(): DeckAction? = buildAction(kind, value, null)
+
+    companion object {
+        fun of(a: DeckAction) = StepDraft(kindOf(a), valueOf(a))
+    }
+}
+
+/** Kinds allowed inside a macro / repeat. */
+private val STEP_KINDS = listOf("hotkey", "text", "open", "media", "volume_step", "delay_ms", "remote")
+
+private fun widgetLabel(w: String) = when (w) {
+    "cpu" -> "CPU %"
+    "ram" -> "RAM %"
+    "clock" -> "Clock"
+    "now_playing" -> "Now playing"
+    else -> w
+}
+
+private fun bindLabel(b: String) = when (b) {
+    "mic_muted" -> "Mic muted"
+    "audio_muted" -> "Sound muted"
+    "media_playing" -> "Media playing"
+    else -> b
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -127,15 +175,18 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
         }
         Spacer(Modifier.size(8.dp))
         if (ui.deck.isEmpty()) {
-            HintText("No deck buttons yet. Turn on Edit and add hotkeys, text snippets, apps, links or media keys.")
+            HintText("No deck buttons yet. Turn on Edit and add hotkeys, text snippets, apps, links, media keys" + if (ui.phase3) ", macros or app remotes." else ".")
         }
         LazyVerticalGrid(columns = GridCells.Adaptive(110.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(ui.deck, key = { it.id }) { b ->
+                val on = ui.deckOn[b.id]
+                val widgetText = ui.deckText[b.id]
                 Box(
                     Modifier
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(parseColor(b.color))
+                        .background(parseColor(b.color).copy(alpha = if (on == false) 0.45f else 1f))
+                        .border(if (on == true) 3.dp else 0.dp, Color.White, RoundedCornerShape(16.dp))
                         .combinedClickable(
                             onClick = {
                                 if (editMode) {
@@ -150,7 +201,15 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
                         .padding(8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(b.label.ifBlank { kindLabel(kindOf(b.action)) }, color = Color.White, textAlign = TextAlign.Center, style = MaterialTheme.typography.titleSmall)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(b.label.ifBlank { kindLabel(kindOf(b.action)) }, color = Color.White, textAlign = TextAlign.Center, style = MaterialTheme.typography.titleSmall)
+                        if (widgetText != null) {
+                            Text(widgetText, color = Color.White, textAlign = TextAlign.Center, style = MaterialTheme.typography.headlineSmall, maxLines = 2)
+                        }
+                        if (on != null) {
+                            Text(if (on) "ON" else "OFF", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
             }
         }
@@ -173,8 +232,27 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
     var color by remember { mutableStateOf(button.color) }
     var kind by remember { mutableStateOf(kindOf(button.action)) }
     var value by remember { mutableStateOf(valueOf(button.action)) }
+    val steps = remember {
+        mutableStateListOf<StepDraft>().apply { (button.action as? DeckAction.Macro)?.steps?.forEach { add(StepDraft.of(it)) } }
+    }
+    var times by remember { mutableStateOf(((button.action as? DeckAction.Repeat)?.times ?: 2).toString()) }
+    var inner by remember { mutableStateOf((button.action as? DeckAction.Repeat)?.action?.let { StepDraft.of(it) } ?: StepDraft("hotkey", "")) }
+    var stateBind by remember { mutableStateOf(button.stateBind) }
+    var widget by remember { mutableStateOf(button.widget) }
     var picking by remember { mutableStateOf(false) }
-    val action = buildAction(kind, value, button.action)
+
+    val action: DeckAction? = when (kind) {
+        "macro" -> steps.map { it.build() }.takeIf { l -> l.isNotEmpty() && l.size <= DeckAction.MAX_MACRO_STEPS && l.all { it != null } }
+            ?.let { DeckAction.Macro(it.filterNotNull()) }
+        "repeat" -> {
+            val n = times.trim().toIntOrNull()?.takeIf { it in 1..1000 }
+            val a = inner.build()
+            if (n != null && a != null) DeckAction.Repeat(n, a) else null
+        }
+        else -> buildAction(kind, value, button.action)
+    }
+    val p3 = ui.phase3 || DeckCodec.needsPhase3(button.action) || button.stateBind != null || button.widget != null
+    val kinds = DeckAction.KINDS + if (p3) DeckAction.P3_KINDS else emptyList()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -196,43 +274,56 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                 }
                 Text("Action", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    DeckAction.KINDS.forEach { k ->
+                    kinds.forEach { k ->
                         FilterChip(selected = kind == k, onClick = {
                             if (kind != k) {
                                 kind = k
-                                value = when (k) {
-                                    "media" -> "toggle_play_pause"
-                                    "volume_step" -> "0.05"
-                                    "delay_ms" -> "250"
-                                    else -> ""
-                                }
+                                value = defaultValue(k)
+                                if (k == "macro" && steps.isEmpty()) steps += StepDraft("hotkey", "")
                             }
                         }, label = { Text(kindLabel(k)) })
                     }
                 }
                 when (kind) {
-                    "hotkey" -> OutlinedTextField(value, { value = it }, label = { Text("Keys, e.g. ctrl+shift+esc") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    "text" -> OutlinedTextField(value, { value = it }, label = { Text("Text to type") }, modifier = Modifier.fillMaxWidth())
                     "launch" -> {
                         val name = ui.apps?.firstOrNull { it.appId == value }?.name
                         Text(if (value.isEmpty()) "No app chosen" else (name ?: value))
                         OutlinedButton(onClick = { picking = true }) { Text("Choose app") }
                     }
-                    "open" -> OutlinedTextField(value, { value = it }, label = { Text("URL, folder or file on the PC") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    "media" -> Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        DeckAction.MEDIA_ACTIONS.forEach { m ->
-                            FilterChip(selected = value == m, onClick = { value = m }, label = { Text(m.replace('_', ' ')) })
+                    "macro" -> {
+                        HintText("Runs the steps in order (max ${DeckAction.MAX_MACRO_STEPS}). Add delays between steps if an app needs time.")
+                        steps.forEachIndexed { i, st ->
+                            Text("Step ${i + 1}", style = MaterialTheme.typography.labelMedium)
+                            StepEditor(st) { steps[i] = it }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(enabled = i > 0, onClick = { steps.add(i - 1, steps.removeAt(i)) }) { Text("Up") }
+                                TextButton(enabled = i < steps.lastIndex, onClick = { steps.add(i + 1, steps.removeAt(i)) }) { Text("Down") }
+                                TextButton(onClick = { steps.removeAt(i) }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+                            }
                         }
+                        OutlinedButton(enabled = steps.size < DeckAction.MAX_MACRO_STEPS, onClick = { steps += StepDraft("delay_ms", "250") }) { Text("Add step") }
                     }
-                    "volume_step" -> OutlinedTextField(
-                        value, { value = it }, label = { Text("Step (-1..1), e.g. 0.05 or -0.05") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth(),
-                    )
-                    "delay_ms" -> OutlinedTextField(
-                        value, { value = it }, label = { Text("Delay in ms") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
-                    )
-                    else -> HintText("This action was made elsewhere and is kept as-is: $value")
+                    "repeat" -> {
+                        OutlinedTextField(
+                            times, { times = it }, label = { Text("Times (1-1000)") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
+                        )
+                        StepEditor(inner) { inner = it }
+                    }
+                    "other" -> HintText("This action was made elsewhere and is kept as-is: $value")
+                    else -> SimpleValueEditor(kind, value) { value = it }
+                }
+                if (p3) {
+                    Text("Show live state", style = MaterialTheme.typography.labelLarge)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = stateBind == null, onClick = { stateBind = null }, label = { Text("None") })
+                        DeckAction.STATE_BINDS.forEach { s -> FilterChip(selected = stateBind == s, onClick = { stateBind = s }, label = { Text(bindLabel(s)) }) }
+                    }
+                    Text("Live widget", style = MaterialTheme.typography.labelLarge)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilterChip(selected = widget == null, onClick = { widget = null }, label = { Text("None") })
+                        DeckAction.WIDGETS.forEach { w -> FilterChip(selected = widget == w, onClick = { widget = w }, label = { Text(widgetLabel(w)) }) }
+                    }
                 }
                 if (!isNew) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -247,7 +338,12 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
         },
         confirmButton = {
             TextButton(enabled = action != null, onClick = {
-                remote.saveDeckButton(button.copy(label = label.trim(), color = color.ifBlank { DeckCodec.DEFAULT_COLOR }, action = action!!))
+                remote.saveDeckButton(
+                    button.copy(
+                        label = label.trim(), color = color.ifBlank { DeckCodec.DEFAULT_COLOR }, action = action!!,
+                        stateBind = stateBind, widget = widget,
+                    ),
+                )
                 onDismiss()
             }) { Text("Save") }
         },
@@ -267,6 +363,56 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                 picking = false
             },
             onDismiss = { picking = false },
+        )
+    }
+}
+
+/** Kind chips + value for one macro step or the repeated action. */
+@Composable
+private fun StepEditor(step: StepDraft, onChange: (StepDraft) -> Unit) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        STEP_KINDS.forEach { k ->
+            FilterChip(selected = step.kind == k, onClick = { if (step.kind != k) onChange(StepDraft(k, defaultValue(k))) }, label = { Text(kindLabel(k)) })
+        }
+    }
+    SimpleValueEditor(step.kind, step.value) { onChange(step.copy(value = it)) }
+}
+
+@Composable
+private fun SimpleValueEditor(kind: String, value: String, onValue: (String) -> Unit) {
+    when (kind) {
+        "hotkey" -> OutlinedTextField(value, onValue, label = { Text("Keys, e.g. ctrl+shift+esc") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        "text" -> OutlinedTextField(value, onValue, label = { Text("Text to type") }, modifier = Modifier.fillMaxWidth())
+        "launch" -> OutlinedTextField(value, onValue, label = { Text("App id") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        "open" -> OutlinedTextField(value, onValue, label = { Text("URL, folder or file on the PC") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        "media" -> Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            DeckAction.MEDIA_ACTIONS.forEach { m -> FilterChip(selected = value == m, onClick = { onValue(m) }, label = { Text(m.replace('_', ' ')) }) }
+        }
+        "volume_step" -> OutlinedTextField(
+            value, onValue, label = { Text("Step (-1..1), e.g. 0.05 or -0.05") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth(),
+        )
+        "delay_ms" -> OutlinedTextField(
+            value, onValue, label = { Text("Delay in ms") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth(),
+        )
+        "remote" -> RemotePicker(value, onValue)
+        else -> Unit
+    }
+}
+
+/** PowerPoint / browser / OBS remote commands; OBS scenes take a name. */
+@Composable
+private fun RemotePicker(value: String, onValue: (String) -> Unit) {
+    val isScene = value.startsWith(DeckAction.OBS_SCENE_PREFIX)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        DeckAction.REMOTE_COMMANDS.forEach { c -> FilterChip(selected = value == c, onClick = { onValue(c) }, label = { Text(c) }) }
+        FilterChip(selected = isScene, onClick = { if (!isScene) onValue(DeckAction.OBS_SCENE_PREFIX) }, label = { Text("obs.scene") })
+    }
+    if (isScene) {
+        OutlinedTextField(
+            value.removePrefix(DeckAction.OBS_SCENE_PREFIX), { onValue(DeckAction.OBS_SCENE_PREFIX + it) },
+            label = { Text("OBS scene name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
     }
 }

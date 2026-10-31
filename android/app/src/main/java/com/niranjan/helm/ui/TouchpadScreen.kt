@@ -1,5 +1,9 @@
 package com.niranjan.helm.ui
 
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niranjan.helm.device.GyroSensor
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -65,7 +69,17 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
     val focusManager = LocalFocusManager.current
     val focus = remember { FocusRequester() }
     var dragLock by remember { mutableStateOf(remote.isDragLocked) }
+    var airMouse by remember { mutableStateOf(false) }
     var speed by remember { mutableStateOf(settings.touchpadSpeed) }
+    val context = LocalContext.current
+    DisposableEffect(airMouse) {
+        val sensor = if (airMouse) GyroSensor(context) { x, z, dt -> remote.gyroSample(x, z, dt, speed) } else null
+        sensor?.start()
+        onDispose {
+            sensor?.stop()
+            remote.gyroReset()
+        }
+    }
     val mods = remember { mutableStateListOf<Int>() }
     var text by remember { mutableStateOf("") }
     var autoShown by remember { mutableStateOf(false) }
@@ -108,6 +122,10 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
     Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = dragLock, onClick = { dragLock = remote.setDragLock(!dragLock) }, label = { Text("Drag lock") })
+            val rui by remote.ui.collectAsStateWithLifecycle()
+            if (rui.phase4 && GyroSensor.available(LocalContext.current)) {
+                FilterChip(selected = airMouse, onClick = { airMouse = !airMouse }, label = { Text("Air mouse") })
+            }
             Text("Speed", style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = speed,
