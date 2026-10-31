@@ -1,7 +1,7 @@
 //! TLS WebSocket server: handshake (pair / auth), then the request loop.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,7 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
@@ -88,10 +88,11 @@ impl Config {
     }
 }
 
-/// Default data folder: `%APPDATA%\Helm` (or `./helm-data` if APPDATA is not set).
+/// Default data folder: the signed-in user's `%APPDATA%\Helm` (also when started by
+/// `helm-service`, which passes the user's environment), else `./helm-data`.
 pub fn default_data_dir() -> PathBuf {
-    match std::env::var_os("APPDATA") {
-        Some(appdata) => PathBuf::from(appdata).join("Helm"),
+    match paths::roaming_app_data() {
+        Some(appdata) => appdata.join("Helm"),
         None => PathBuf::from("helm-data"),
     }
 }
@@ -114,6 +115,8 @@ pub struct AppState {
     pub power_dry_run: Option<Arc<DryRunBackend>>,
     pub downloads_dir: PathBuf,
     pub download_root: PathBuf,
+    /// Phase 4 relay settings and status (`relay.json`).
+    pub relay: crate::relay::Relay,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -161,6 +164,7 @@ impl AppState {
                 .download_root
                 .clone()
                 .unwrap_or_else(paths::profile_dir),
+            relay: crate::relay::Relay::load(&config.data_dir),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -353,12 +357,17 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         let platform = state.platform.clone();
         tokio::task::spawn_blocking(move || platform.start_watchers(events_tx)).await?
     };
-    let background = vec![
+    let mut background = vec![
         tokio::spawn(pump_events(state.clone(), events_rx)),
         tokio::spawn(poll_windows(state.clone())),
     ];
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    background.push(tokio::spawn(crate::relay::run(
+        state.clone(),
+        acceptor.clone(),
+        shutdown_rx.clone(),
+    )));
     let task = tokio::spawn(accept_loop(listener, acceptor, state.clone(), shutdown_rx));
     tracing::info!(
         "listening on wss://0.0.0.0:{port}{WS_PATH} (fingerprint {})",
@@ -462,7 +471,7 @@ async fn accept_loop(
                 Ok((tcp, peer)) => {
                     let _ = tcp.set_nodelay(true);
                     connections.spawn(handle_connection(
-                        state.clone(), acceptor.clone(), tcp, peer, shutdown.clone(),
+                        state.clone(), acceptor.clone(), tcp, peer.to_string(), shutdown.clone(),
                     ));
                 }
                 Err(e) => {
@@ -483,13 +492,16 @@ async fn accept_loop(
     connections.abort_all();
 }
 
-async fn handle_connection(
+/// Serve one connection: a LAN TCP socket, or a relay channel (`peer` = `via=relay ch=<n>`).
+pub(crate) async fn handle_connection<T>(
     state: Arc<AppState>,
     acceptor: TlsAcceptor,
-    tcp: TcpStream,
-    peer: SocketAddr,
+    tcp: T,
+    peer: String,
     shutdown: watch::Receiver<bool>,
-) {
+) where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let limit = state.handshake_timeout;
     let tls = match tokio::time::timeout(limit, acceptor.accept(tcp)).await {
         Ok(Ok(s)) => s,
@@ -515,7 +527,7 @@ async fn handle_connection(
         }
         Err(_) => return,
     };
-    run_session(state, ws, peer.to_string(), shutdown).await;
+    run_session(state, ws, peer, shutdown).await;
 }
 
 /// WebSocket upgrade callback: only `/ws` is served.
@@ -722,6 +734,16 @@ async fn run_session<S>(
     };
     let outcome = match proto::parse_handshake(&text) {
         Err(why) => Err((codes::BAD_MESSAGE, why)),
+        // Pairing needs the QR code, a LAN/proximity action (PROTOCOL §12).
+        Ok(Handshake::Pair { device_id, .. }) if crate::relay::is_relayed_peer(&peer) => {
+            state
+                .audit
+                .record("pair_fail", Some(&device_id), Some(&peer), "relayed");
+            Err((
+                codes::BAD_MESSAGE,
+                "pairing is only allowed on the local network".to_string(),
+            ))
+        }
         Ok(Handshake::Pair {
             token,
             device_id,

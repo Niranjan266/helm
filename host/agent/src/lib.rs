@@ -18,6 +18,7 @@
 //! ```
 
 pub mod audit;
+pub mod desktop;
 pub mod devices;
 pub mod dpapi;
 pub mod files;
@@ -30,6 +31,7 @@ pub mod paths;
 pub mod platform;
 pub mod proto;
 pub mod qr;
+pub mod relay;
 pub mod router;
 pub mod screen;
 pub mod server;
@@ -38,7 +40,9 @@ pub mod store;
 pub mod sysinfo;
 #[cfg(windows)]
 pub mod tray;
+pub mod update;
 pub mod util;
+pub mod wol;
 
 pub use pairing::Pairing;
 pub use server::{AppState, Config, DEFAULT_PORT, ServerHandle, default_data_dir, start};

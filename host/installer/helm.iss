@@ -82,9 +82,9 @@ Filename: "{sys}\netsh.exe"; \
   Flags: runhidden waituntilterminated; StatusMsg: "Configuring Windows Firewall..."
 
 ; Service registration (the old one, if any, was removed in PrepareToInstall).
-Filename: "{app}\helm-service.exe"; Parameters: "install --start auto"; Tasks: startwithwindows; \
+Filename: "{app}\helm-service.exe"; Parameters: "install --start auto -- --background"; Tasks: startwithwindows; \
   Flags: runhidden waituntilterminated; StatusMsg: "Registering the Helm service..."
-Filename: "{app}\helm-service.exe"; Parameters: "install --start demand"; Tasks: not startwithwindows; \
+Filename: "{app}\helm-service.exe"; Parameters: "install --start demand -- --background"; Tasks: not startwithwindows; \
   Flags: runhidden waituntilterminated; StatusMsg: "Registering the Helm service..."
 
 ; Optional "start now" checkbox on the final page.

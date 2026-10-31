@@ -91,6 +91,12 @@ pub trait Platform: Send + Sync + Debug + 'static {
 
     fn network_adapters(&self) -> PResult<Vec<Adapter>>;
     fn battery(&self) -> PResult<Option<Battery>>;
+    /// Broadcast a Wake-on-LAN magic packet on this PC's LAN (`wol.send`).
+    fn send_wol(&self, packet: &[u8; 102]) -> PResult<()> {
+        crate::wol::broadcast(packet)
+            .map(|_| ())
+            .map_err(|e| RpcError::internal(format!("could not send the magic packet: {e}")))
+    }
 
     fn monitors(&self) -> PResult<Vec<Monitor>>;
     fn screenshot_png(&self, monitor_id: Option<&str>) -> PResult<Vec<u8>>;

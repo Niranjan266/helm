@@ -3,6 +3,8 @@
 The Windows PC side of Helm. Phase 0: secure discovery, QR pairing and trusted devices.
 Phase 1 (`features:["p1"]`): apps, windows, input, media, volume, brightness, power, dock,
 deck, clipboard, file transfer, screenshots and live events.
+Phase 4 (`p4`): relay tunnel for access from anywhere, `relay.get`/`relay.set`, `wol.send`,
+gyro air mouse (`gy` input). Phase 5: signed update check, clean start under `helm-service`.
 The wire contract is [`Docs/PROTOCOL.md`](../../Docs/PROTOCOL.md).
 
 ## Build
@@ -25,6 +27,7 @@ helm-agent                         # run; shows a pairing QR if no phone is pair
 helm-agent --pair                  # always show a pairing QR at start
 helm-agent devices                 # list paired devices and exit
 helm-agent revoke <device_id>      # remove a paired device and exit
+helm-agent check-update            # check GitHub Releases for a newer signed build
 ```
 
 While it runs, type `p` + Enter for a fresh pairing QR (new one-time token, valid 5 minutes),
@@ -37,7 +40,7 @@ While it runs, type `p` + Enter for a fresh pairing QR (new one-time token, vali
 | `--no-mdns` | don't advertise `_helm._tcp.local.` on the network |
 | `--pair` | show a pairing QR at start even if devices are paired |
 | `--no-tray` | console only, no notification-area icon |
-| `--background` | no console window; the tray icon is the UI (used by Start with Windows) |
+| `--background` | no console window; the tray icon is the UI; logs go to `agent.log` (used by Start with Windows and `helm-service`) |
 
 ### Tray icon
 
@@ -45,7 +48,34 @@ Right-click the Helm icon in the notification area:
 **Show pairing QR** (new token, opens `pair-qr.svg` in the default browser),
 **Paired devices** (opens the data folder for now), **Start with Windows** (toggles
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Helm` = `"<exe>" --background`),
-**Quit Helm**.
+**Check for updates** (see below), **Quit Helm**.
+
+Only one agent runs per data folder and Windows session (a named mutex), so the
+service-started agent and a "Start with Windows" one never fight over the port or the relay.
+The agent refuses to run in session 0 (the services session has no desktop); `helm-service`
+starts it as the signed-in user, whose `%APPDATA%` is used (looked up via the shell if the
+environment lacks it).
+
+### Updates (Phase 5)
+
+`helm-update` checks GitHub Releases 20 s after start (log only) and when you pick
+**Check for updates**. If a newer stable release exists you are asked whether to download it;
+the installer is then verified (size, SHA-256, Ed25519 signature) and its folder opened. It is
+**never run automatically**. Builds without a compiled-in release key (`HELM_UPDATE_PUBKEY`
+at build time) refuse to check at all.
+
+### Relay (Phase 4)
+
+`relay.set{enabled,url}` (admin) saves `relay.json`; while enabled the agent keeps one
+outgoing WebSocket to `<url>/host/<host_id>` (`wss://` only; `ws://` just for localhost
+tests), signs the relay's challenge with its certificate key (`helm-relay-v1|host|…`), and
+reconnects with backoff (1 s → 60 s, jitter; 10 min after `key_mismatch`). Each relay channel
+is a 256 KiB in-memory pipe fed into the same TLS acceptor and WebSocket handler as LAN
+connections, so the pinned TLS session is end to end and the relay only sees ciphertext.
+Relayed sessions appear in `audit.log` with peer `via=relay ch=<n>`; `pair` is refused over
+them (`bad_message`). A channel whose phone outruns the TLS stack by more than 1 MiB is closed.
+`system.info` reports `relay:{enabled,url}`. `wol.send{mac}` (remote) broadcasts a magic packet
+to UDP port 9 on every LAN interface.
 
 Log level: set `RUST_LOG` (e.g. `RUST_LOG=debug`).
 
@@ -62,6 +92,8 @@ and `pair-qr.svg` is written into the data folder (deleted again when the agent 
 - `dock.json`, `deck.json` — dock pages and deck buttons (written atomically, synced to all
   phones with `dock.changed` / `deck.changed`).
 - `icon-cache\` — app icon PNGs.
+- `relay.json` — relay `{enabled,url}`.
+- `agent.log` (+ `agent.log.1`) — log file in `--background` mode, rotated at 1 MiB.
 
 Files sent from the phone go to `<Downloads>\Helm` (name made safe, never overwritten:
 `a (1).txt`). `file.download` (admin) only serves regular files under the user's profile
@@ -84,6 +116,11 @@ folder, never the Helm data folder, at most 4 GiB, SHA-256 announced first.
   `Config::power_dry_run`); power, cancel, uploads and downloads are written to `audit.log`.
 
 Never share or commit anything from this folder.
+
+Tests: `tests/relay.rs` runs the relay client against an in-process fake relay (tunnel
+protocol v1 over `ws://127.0.0.1`), including pinned TLS + auth through the tunnel, refused
+pairing, reconnect after the relay drops the host, and clean shutdown. Nothing is deployed and
+no real relay or Cloudflare service is contacted.
 
 ## Firewall
 
