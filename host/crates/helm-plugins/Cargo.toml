@@ -1,0 +1,22 @@
+[package]
+name = "helm-plugins"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Helm: WASM plugin host (capability API), trigger engine and Home Assistant client"
+license = "MIT"
+publish = false
+
+[lib]
+name = "helm_plugins"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0"
+# Pure-Rust JIT (Cranelift). No cache/zstd, no WASI, no component model.
+wasmtime = { version = "50", default-features = false, features = ["runtime", "cranelift", "std"] }
+
+[dev-dependencies]
+wat = "1"
