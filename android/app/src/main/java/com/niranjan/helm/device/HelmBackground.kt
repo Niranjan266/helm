@@ -111,6 +111,7 @@ class HelmBackground(private val context: Context, private val controller: HelmC
         HelmWidget.updateAll(context, st)
         if (st.connected) HelmSessionService.show(context) else HelmSessionService.hide(context)
         HelmSessionService.refresh(context, st)
+        WearBridge.publish(context, st)
     }
 
     private fun notifyAlert(pc: String, a: AlertEvent, rule: String?) {

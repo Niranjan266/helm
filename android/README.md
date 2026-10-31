@@ -59,6 +59,23 @@ app/src/main/java/com/niranjan/helm/
   HelmApp.kt            app-scoped holder for identity, stores, discovery and the connection
 ```
 
+## Wear OS companion (`wear/`, `wearlink/`)
+
+`:wear` is a Compose for Wear OS app (minSdk 30): a remote screen (PC name and state from the
+phone, previous / play-pause / next, volume down / mute / up, lock PC, the first four deck
+buttons) and a "Helm PC" tile (media keys, mute, lock). The watch **never talks to the PC**: it
+sends a command over the Wearable Data Layer (`MessageClient`, `/helm/wear/cmd`) to the phone,
+whose `HelmWearService` runs it on the phone's existing pinned-TLS connection and replies on
+`/helm/wear/reply`; the phone publishes its connection state as a DataItem at
+`/helm/wear/status`. Commands are a closed set; lock still honours the per-PC "confirm admin
+actions" setting (the phone shows a tap-to-confirm notification instead). Both APKs use the
+same `applicationId` and must be signed with the same key (a Data Layer requirement).
+`:wearlink` is the plain-Kotlin message codec shared by both (`WearLinkTest`).
+
+```powershell
+.\gradlew.bat :wearlink:test :wear:assembleDebug   # wear/build/outputs/apk/debug/wear-debug.apk
+```
+
 ## Build
 
 Requirements: Android SDK (platform 34), and **JDK 17 or 21**. AGP does not run on newer JDKs,
