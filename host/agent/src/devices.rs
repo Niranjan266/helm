@@ -101,6 +101,19 @@ impl DeviceStore {
         })
     }
 
+    /// Change a device's tier. Returns false if it is not paired.
+    pub fn set_tier(&self, device_id: &str, tier: Tier) -> anyhow::Result<bool> {
+        self.modify(
+            |devices| match devices.iter_mut().find(|d| d.device_id == device_id) {
+                Some(d) => {
+                    d.tier = tier;
+                    true
+                }
+                None => false,
+            },
+        )
+    }
+
     /// Remove a device. Returns false if it was not paired.
     pub fn revoke(&self, device_id: &str) -> anyhow::Result<bool> {
         self.modify(|devices| {

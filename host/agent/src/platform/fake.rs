@@ -29,6 +29,56 @@ pub struct FakeState {
     /// `start_audio` works (true) or reports `unsupported`.
     pub audio_supported: bool,
     pub cursor: CursorState,
+    // Phase 3
+    pub stats: Stats,
+    pub processes: Vec<ProcessInfo>,
+    pub audio_sessions: Vec<AudioSession>,
+    pub mic_muted: Option<bool>,
+    pub fixed_drives: Vec<std::path::PathBuf>,
+    pub clock: String,
+}
+
+pub fn sample_process(pid: u32, name: &str) -> ProcessInfo {
+    ProcessInfo {
+        pid,
+        parent_pid: None,
+        name: name.into(),
+        exe: Some(format!("C:\\Fake\\{name}")),
+        cpu_pct: 1.5,
+        ram_bytes: 10_000_000,
+        is_elevated: Some(false),
+        priority: Some(Priority::Normal),
+    }
+}
+
+pub fn sample_audio_session(id: &str, name: &str) -> AudioSession {
+    AudioSession {
+        id: id.into(),
+        name: name.into(),
+        pid: 1234,
+        level: 0.8,
+        muted: false,
+        is_system: false,
+        active: true,
+    }
+}
+
+/// Stats snapshot with the given CPU / RAM use and one disk.
+pub fn sample_stats(cpu: f32, ram_pct: u64) -> Stats {
+    Stats {
+        timestamp_ms: 1,
+        cpu_total: cpu,
+        cpu_per_core: vec![cpu, cpu],
+        ram_used: ram_pct * 1_000_000,
+        ram_total: 100_000_000,
+        disks: vec![helm_win_sysmon::stats::DiskStats {
+            mount: "C:\\".into(),
+            used: 900,
+            total: 1000,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
 }
 
 /// One tiny valid PNG (1x1, opaque black).
@@ -130,6 +180,15 @@ impl Default for FakeState {
                 height: 1080,
                 is_primary: true,
             }],
+            stats: sample_stats(10.0, 40),
+            processes: vec![
+                sample_process(1000, "notes.exe"),
+                sample_process(2000, "game.exe"),
+            ],
+            audio_sessions: vec![sample_audio_session("sess-1", "Music")],
+            mic_muted: Some(false),
+            fixed_drives: Vec::new(),
+            clock: "12:34".into(),
             au_size: 200,
             audio_supported: true,
             cursor: CursorState {
@@ -241,9 +300,19 @@ impl Drop for FakeAudio {
     }
 }
 
+#[derive(Debug)]
+struct FakeSampler(Arc<Mutex<FakeState>>);
+
+impl StatsSampler for FakeSampler {
+    fn sample(&self) -> PResult<Stats> {
+        Ok(self.0.lock().unwrap().stats.clone())
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct FakePlatform {
-    state: Mutex<FakeState>,
+    state: Arc<Mutex<FakeState>>,
+    foreground: Mutex<Option<ForegroundSink>>,
     calls: Mutex<Vec<String>>,
     ops: Arc<Mutex<Vec<Op>>>,
     block_input: Arc<AtomicBool>,
@@ -309,6 +378,21 @@ impl FakePlatform {
     /// Fake audio streams currently running.
     pub fn audio_streams(&self) -> u64 {
         self.audio_running.load(Ordering::SeqCst)
+    }
+
+    /// Pretend the foreground window changed. Returns false if the watcher is not running.
+    pub fn emit_foreground(&self, exe_name: &str) -> bool {
+        let info = ForegroundInfo {
+            hwnd: 100,
+            pid: 1000,
+            exe: Some(format!("C:\\Fake\\{exe_name}")),
+            exe_name: exe_name.into(),
+            title: exe_name.into(),
+        };
+        match self.foreground.lock().unwrap().as_ref() {
+            Some(tx) => tx.send(info).is_ok(),
+            None => false,
+        }
     }
 
     pub fn watchers_running(&self) -> bool {
@@ -591,5 +675,92 @@ impl Platform for FakePlatform {
             hot_y: 0,
             png: TINY_PNG.to_vec(),
         }))
+    }
+
+    fn new_stats_sampler(&self) -> Arc<dyn StatsSampler> {
+        Arc::new(FakeSampler(self.state.clone()))
+    }
+    fn processes(&self) -> PResult<Vec<ProcessInfo>> {
+        Ok(self.state().processes.clone())
+    }
+    fn kill_process(&self, pid: u32) -> PResult<()> {
+        let mut st = self.state();
+        let before = st.processes.len();
+        st.processes.retain(|p| p.pid != pid);
+        if st.processes.len() == before {
+            return Err(RpcError::bad_params(format!("not found: process {pid}")));
+        }
+        drop(st);
+        self.record(format!("kill_process:{pid}"));
+        Ok(())
+    }
+    fn set_process_priority(&self, pid: u32, level: Priority) -> PResult<()> {
+        let mut st = self.state();
+        let Some(p) = st.processes.iter_mut().find(|p| p.pid == pid) else {
+            return Err(RpcError::bad_params(format!("not found: process {pid}")));
+        };
+        p.priority = Some(level);
+        drop(st);
+        self.record(format!("set_process_priority:{pid}:{level:?}"));
+        Ok(())
+    }
+
+    fn audio_sessions(&self) -> PResult<Vec<AudioSession>> {
+        Ok(self.state().audio_sessions.clone())
+    }
+    fn set_session_volume(&self, id: &str, level: f32) -> PResult<()> {
+        let mut st = self.state();
+        let Some(s) = st.audio_sessions.iter_mut().find(|s| s.id == id) else {
+            return Err(RpcError::bad_params(format!("not found: session {id}")));
+        };
+        s.level = level;
+        drop(st);
+        self.record(format!("set_session_volume:{id}:{level:.2}"));
+        Ok(())
+    }
+    fn set_session_muted(&self, id: &str, muted: bool) -> PResult<()> {
+        let mut st = self.state();
+        let Some(s) = st.audio_sessions.iter_mut().find(|s| s.id == id) else {
+            return Err(RpcError::bad_params(format!("not found: session {id}")));
+        };
+        s.muted = muted;
+        drop(st);
+        self.record(format!("set_session_muted:{id}:{muted}"));
+        Ok(())
+    }
+    fn mic_muted(&self) -> PResult<Option<bool>> {
+        Ok(self.state().mic_muted)
+    }
+
+    fn move_window_to_monitor(&self, hwnd: u64, monitor_index: usize) -> PResult<()> {
+        self.known_window(hwnd)?;
+        if monitor_index >= self.state().monitors.len() {
+            return Err(RpcError::bad_params(format!(
+                "not found: monitor {monitor_index}"
+            )));
+        }
+        self.record(format!("move_window:{hwnd}:{monitor_index}"));
+        Ok(())
+    }
+    fn snap_window(&self, hwnd: u64, pos: Snap) -> PResult<()> {
+        self.known_window(hwnd)?;
+        self.record(format!("snap_window:{hwnd}:{pos:?}"));
+        Ok(())
+    }
+    fn virtual_desktop(&self, action: VirtualDesktop) -> PResult<()> {
+        self.record(format!("virtual_desktop:{action:?}"));
+        Ok(())
+    }
+
+    fn fixed_drives(&self) -> PResult<Vec<std::path::PathBuf>> {
+        Ok(self.state().fixed_drives.clone())
+    }
+    fn local_clock(&self) -> PResult<String> {
+        Ok(self.state().clock.clone())
+    }
+
+    fn start_foreground_watcher(&self, sink: ForegroundSink) -> WatchGuard {
+        *self.foreground.lock().unwrap() = Some(sink);
+        Box::new(())
     }
 }

@@ -155,6 +155,144 @@ impl Platform for RealPlatform {
             }
         }
     }
+
+    fn new_stats_sampler(&self) -> Arc<dyn StatsSampler> {
+        Arc::new(RealSampler(helm_win_sysmon::stats::Sampler::new()))
+    }
+    fn processes(&self) -> PResult<Vec<ProcessInfo>> {
+        helm_win_sysmon::process::processes().map_err(sysmon_err)
+    }
+    fn kill_process(&self, pid: u32) -> PResult<()> {
+        helm_win_sysmon::process::kill(pid).map_err(sysmon_err)
+    }
+    fn set_process_priority(&self, pid: u32, level: Priority) -> PResult<()> {
+        helm_win_sysmon::process::set_priority(pid, level).map_err(sysmon_err)
+    }
+    fn audio_sessions(&self) -> PResult<Vec<AudioSession>> {
+        helm_win_system::audio::list_sessions().map_err(system_err)
+    }
+    fn set_session_volume(&self, id: &str, level: f32) -> PResult<()> {
+        helm_win_system::audio::set_session_volume(id, level).map_err(system_err)
+    }
+    fn set_session_muted(&self, id: &str, muted: bool) -> PResult<()> {
+        helm_win_system::audio::set_session_muted(id, muted).map_err(system_err)
+    }
+    fn mic_muted(&self) -> PResult<Option<bool>> {
+        mic_muted()
+    }
+    fn move_window_to_monitor(&self, hwnd: u64, monitor_index: usize) -> PResult<()> {
+        helm_win_sysmon::window::move_to_monitor(hwnd, monitor_index).map_err(sysmon_err)
+    }
+    fn snap_window(&self, hwnd: u64, pos: Snap) -> PResult<()> {
+        helm_win_sysmon::window::snap(hwnd, pos).map_err(sysmon_err)
+    }
+    fn virtual_desktop(&self, action: VirtualDesktop) -> PResult<()> {
+        helm_win_sysmon::window::virtual_desktop(action).map_err(sysmon_err)
+    }
+    fn fixed_drives(&self) -> PResult<Vec<std::path::PathBuf>> {
+        fixed_drives()
+    }
+    fn local_clock(&self) -> PResult<String> {
+        local_clock()
+    }
+    fn start_foreground_watcher(&self, sink: ForegroundSink) -> WatchGuard {
+        match helm_win_sysmon::foreground::ForegroundWatcher::start(move |info| {
+            let _ = sink.send(info.clone());
+        }) {
+            Ok(w) => Box::new(w),
+            Err(e) => {
+                tracing::warn!("foreground watcher unavailable: {e}");
+                Box::new(())
+            }
+        }
+    }
+}
+
+// ---- Phase 3 helpers ----
+
+struct RealSampler(helm_win_sysmon::stats::Sampler);
+
+impl StatsSampler for RealSampler {
+    fn sample(&self) -> PResult<Stats> {
+        self.0.sample().map_err(sysmon_err)
+    }
+}
+
+/// Default capture device (`eCapture`, `eCommunications`) mute state via Core Audio.
+#[cfg(windows)]
+fn mic_muted() -> PResult<Option<bool>> {
+    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+    use windows::Win32::Media::Audio::{
+        IMMDeviceEnumerator, MMDeviceEnumerator, eCapture, eCommunications,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+    };
+    // SAFETY: COM is initialised on this blocking-pool thread for the duration of the call
+    // (and uninitialised only if this call initialised it); interfaces drop before that.
+    unsafe {
+        let init = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let result = (|| -> windows::core::Result<Option<bool>> {
+            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            let dev = match en.GetDefaultAudioEndpoint(eCapture, eCommunications) {
+                Ok(d) => d,
+                // HRESULT_FROM_WIN32(ERROR_NOT_FOUND): no microphone.
+                Err(e) if e.code().0 == 0x8007_0490_u32 as i32 => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            let vol: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None)?;
+            Ok(Some(vol.GetMute()?.as_bool()))
+        })();
+        if init.is_ok() {
+            CoUninitialize();
+        }
+        result.map_err(|e| RpcError::internal(format!("microphone state: {e}")))
+    }
+}
+
+#[cfg(not(windows))]
+fn mic_muted() -> PResult<Option<bool>> {
+    Ok(None)
+}
+
+#[cfg(windows)]
+fn fixed_drives() -> PResult<Vec<std::path::PathBuf>> {
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    const DRIVE_FIXED: u32 = 3;
+    // SAFETY: plain Win32 query.
+    let mask = unsafe { GetLogicalDrives() };
+    let mut out = Vec::new();
+    for i in 0..26u8 {
+        if mask & (1 << i) == 0 {
+            continue;
+        }
+        let root = format!("{}:\\", (b'A' + i) as char);
+        let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: `wide` is NUL-terminated and outlives the call.
+        let kind = unsafe { GetDriveTypeW(windows::core::PCWSTR(wide.as_ptr())) };
+        if kind == DRIVE_FIXED {
+            out.push(std::path::PathBuf::from(root));
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(not(windows))]
+fn fixed_drives() -> PResult<Vec<std::path::PathBuf>> {
+    Ok(vec![std::path::PathBuf::from("/")])
+}
+
+#[cfg(windows)]
+fn local_clock() -> PResult<String> {
+    // SAFETY: GetLocalTime only returns a struct.
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    Ok(format!("{:02}:{:02}", t.wHour, t.wMinute))
+}
+
+#[cfg(not(windows))]
+fn local_clock() -> PResult<String> {
+    let s = (crate::util::now_ms() / 1000) as u64;
+    Ok(format!("{:02}:{:02}", (s / 3600) % 24, (s / 60) % 60))
 }
 
 struct Watchers {
