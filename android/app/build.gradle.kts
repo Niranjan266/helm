@@ -73,6 +73,9 @@ dependencies {
     implementation(libs.play.services.code.scanner)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment)
+    // Wear OS companion relay (G7)
+    implementation(project(":wearlink"))
+    implementation(libs.play.services.wearable)
 
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
