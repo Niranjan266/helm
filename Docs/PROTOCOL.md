@@ -223,7 +223,67 @@ Deck `action` = one of `{"hotkey":"ctrl+shift+esc"}`, `{"text":"…"}`, `{"launc
 - **Open (Phase 2):** responses above 1 MiB (big screenshots/clipboard images) should move to
   binary transfers; until then receivers must accept text frames up to 16 MiB.
 
-## 10. Storage on the PC
+## 10. Phase 2 — screen & audio stream (feature `p2`)
+
+- Stream socket: second WebSocket on the same TLS port, path `/stream`, same hello/auth
+  handshake (pair not allowed). After `ready`, phone sends one text frame
+  `{"type":"stream.open","token":"<from stream.start>"}`.
+- Control socket methods (remote tier):
+  - `stream.start{monitor_id?|hwnd?, max_width, max_height, fps, bitrate_kbps, audio:bool}` →
+    `{token, width, height, fps, codec:"h264", encoder:"hardware"|"software"}`. Token is single-use, 30 s.
+  - `stream.stop{}`, `stream.idr{}` (request keyframe), `stream.config{bitrate_kbps?, fps?}`.
+  - `stream.stats{rx_kbps, decoded_fps, dropped, rtt_ms}` (phone → PC every 1 s; agent adapts
+    bitrate: drop 20 % when dropped > 0 or backlog grows, raise 10 % every 5 s when healthy).
+- Stream frames (binary, agent → phone), 1-byte kind + 8-byte pts µs (BE) + payload:
+  - `0x01` H.264 access unit (Annex-B), `0x02` H.264 keyframe access unit (with SPS/PPS)
+  - `0x03` Opus packet (48 kHz stereo, 20 ms)
+  - `0x04` cursor: JSON `{x,y,visible,shape_id}` in stream pixel coordinates
+  - `0x05` cursor shape: `[u32 shape_id][u16 w][u16 h][u16 hot_x][u16 hot_y]` + PNG
+- Backpressure: agent keeps ≤ 3 video frames queued; beyond that it drops non-key frames and
+  requests an IDR once the queue drains.
+- Input while streaming still uses `in` frames on the control socket. Direct-touch mode sends
+  absolute moves: `{"type":"in","k":"ma","x":0..1,"y":0..1}` normalised to the streamed monitor.
+- `record.start{audio}` → `{path}`, `record.stop` → `{path,duration_ms}` (MP4 in Videos\Helm).
+
+## 11. Phase 3 — power user (feature `p3`)
+
+| method | tier | params → result |
+|---|---|---|
+| `stats.subscribe` | viewer | `{interval_ms ≥ 500}` → `{}`; events `stats.tick{Stats}` (helm-win-sysmon struct) |
+| `stats.unsubscribe` | viewer | → `{}` |
+| `alerts.get` / `alerts.set` | viewer / admin | `{rules:[{id,kind:"cpu_above"|"ram_above"|"disk_free_below",threshold,for_s?,mount?}]}`; events `alert{id,firing,value}` |
+| `process.list` | viewer | → `{processes:[{pid,name,exe,cpu_pct,ram_bytes}]}` |
+| `process.kill` / `process.priority` | admin | `{pid}` / `{pid,level:"idle"|"below_normal"|"normal"|"above_normal"|"high"}` → `{}` |
+| `audio.sessions` | viewer | → `{sessions:[{id,name,pid,level,muted}]}` |
+| `audio.session.set` | remote | `{id,level?,muted?}` → `{}` |
+| `windows.move` | remote | `{hwnd,monitor_index}` → `{}` |
+| `windows.snap` | remote | `{hwnd,pos:"left"|"right"|"maximize"|"restore"}` → `{}` |
+| `desktop.switch` | remote | `{dir:"next"|"prev"|"new"|"close"}` → `{}` |
+| `profiles.get` / `profiles.set` | viewer / remote | `{profiles:[{id,name,match_exe?,deck_id?,dock_page?}]}`; event `profile.active{id\|null}` from the foreground watcher |
+| `fs.list` | admin | `{path}` → `{entries:[{name,is_dir,size,modified_ms}]}` (roots: user profile + fixed drives; `path:""` lists roots) |
+| `fs.delete` / `fs.mkdir` / `fs.open` | admin | `{path}` → `{}` (`fs.open` opens on PC) |
+| `devices.set_tier` | admin | `{device_id,tier}` → `{}` |
+| `audit.list` | admin | `{limit}` → `{lines:[…]}` |
+
+Deck additions: action `{"macro":[action…]}` (sequence, `delay_ms` allowed inside, max 50 steps),
+`{"repeat":{"times":n,"action":…}}`, `{"remote":"powerpoint.next"|"powerpoint.prev"|"powerpoint.start"|"powerpoint.end"|"browser.back"|"browser.forward"|"browser.tab_next"|"browser.tab_prev"|"browser.reload"|"obs.toggle_record"|"obs.toggle_stream"|"obs.scene:<name>"}`.
+Button `state` binding: `{"bind":"mic_muted"|"audio_muted"|"media_playing"}` → events
+`deck.state{id,on}`. Widgets: `{"widget":"cpu"|"ram"|"clock"|"now_playing"}` → `deck.widget{id,text}`.
+OBS uses obs-websocket v5 at `ws://127.0.0.1:4455` with password from `obs.json` in data dir.
+
+## 12. Phase 4 — anywhere access (feature `p4`)
+
+- Relay tunnel: see `relay/README.md` "Tunnel protocol v1". The agent keeps one outgoing
+  connection to the relay when `relay.enabled`; the phone, when LAN connect fails, opens
+  `wss://<relay>/connect/<host_id>` and runs the normal pinned TLS + `/ws` (or `/stream`) inside it.
+- `pair` is refused over relayed channels (pair on LAN only).
+- `relay.get` / `relay.set` (admin): `{enabled, url}`. Saved PCs store `relay_url` from `system.info`
+  (which adds `relay:{enabled,url}`).
+- Remote wake: `wol.send{mac}` (remote tier) — an awake agent sends the magic packet on its LAN.
+- USB: no protocol change (USB tethering is just another LAN address).
+- `in` kind `gy{dx,dy}` = gyro air-mouse deltas (same handling as `mm`).
+
+## 13. Storage on the PC
 
 `%APPDATA%\Helm\` (overridable for tests):
 - `identity.json` — `host_id`, cert DER (base64), private key PKCS#8 **encrypted with Windows
