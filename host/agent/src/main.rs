@@ -15,6 +15,7 @@ USAGE:
     helm-agent devices [OPTIONS]         list paired devices and exit
     helm-agent revoke <device_id> [OPTIONS]
                                          remove a paired device and exit
+    helm-agent check-update              check GitHub Releases for a newer agent and exit
 
 OPTIONS:
     --data-dir <path>   data folder (default %APPDATA%\\Helm)
@@ -22,17 +23,20 @@ OPTIONS:
     --no-mdns           do not advertise on the local network
     --pair              show a pairing QR at start even if devices are paired
     --no-tray           console only: no notification-area icon
-    --background        no console window (tray only; used by Start with Windows)
+    --background        no console window (tray only; logs to agent.log in the data
+                        folder; used by Start with Windows and helm-service)
     -h, --help          show this help
     -V, --version       show the version
 
 While running, type  p + Enter  for a fresh pairing QR,  q + Enter  to quit.
-The tray icon menu offers the same (plus Paired devices and Start with Windows).";
+The tray icon menu offers the same (plus Paired devices, Start with Windows and
+Check for updates). Updates are only checked and verified, never installed silently.";
 
 enum Command {
     Run,
     Devices,
     Revoke(String),
+    CheckUpdate,
 }
 
 struct Args {
@@ -88,6 +92,7 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
     args.command = match positional.as_slice() {
         [] => Command::Run,
         [cmd] if cmd == "devices" => Command::Devices,
+        [cmd] if cmd == "check-update" => Command::CheckUpdate,
         [cmd, id] if cmd == "revoke" => Command::Revoke(id.clone()),
         [cmd] if cmd == "revoke" => bail!("revoke needs a device_id (see `helm-agent devices`)"),
         _ => bail!("unexpected arguments {positional:?}\n\n{USAGE}"),
@@ -182,16 +187,82 @@ type TrayHandle = ();
 enum NoTrayCommand {}
 
 #[cfg(windows)]
-fn start_tray(
+async fn start_tray(
     tx: tokio::sync::mpsc::UnboundedSender<helm_agent::tray::TrayCommand>,
+    background: bool,
 ) -> Option<TrayHandle> {
-    match helm_agent::tray::Tray::start(tx) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            eprintln!("tray icon unavailable ({e:#}); console mode only");
-            None
+    // Right after sign-in (Start with Windows / helm-service) the taskbar may not exist yet:
+    // in background mode keep trying for about a minute.
+    let attempts = if background { 30 } else { 1 };
+    for attempt in 1..=attempts {
+        match helm_agent::tray::Tray::start(tx.clone()) {
+            Ok(t) => return Some(t),
+            Err(e) if attempt == attempts => {
+                eprintln!("tray icon unavailable ({e:#}); console mode only");
+                tracing::warn!("tray icon unavailable: {e:#}");
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
         }
     }
+    None
+}
+
+/// Tray "Check for updates": check, and offer to download + verify (never install).
+#[cfg(windows)]
+async fn check_updates_interactive() {
+    use helm_agent::update::{self, UpdateStatus};
+    let status = tokio::task::spawn_blocking(update::check)
+        .await
+        .unwrap_or_else(|e| UpdateStatus::Failed(e.to_string()));
+    println!("{}", status.summary());
+    let _ = tokio::task::spawn_blocking(move || {
+        let title = "Helm updates";
+        let UpdateStatus::Available(c) = &status else {
+            helm_agent::desktop::message_box(title, &status.summary(), false);
+            return;
+        };
+        let ask = format!(
+            "{}\n\nDownload the installer and verify its signature now? \
+             It will not be run automatically.",
+            status.summary()
+        );
+        if !helm_agent::desktop::message_box(title, &ask, true) {
+            return;
+        }
+        match update::download(c) {
+            Ok(path) => {
+                let folder = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                helm_agent::desktop::message_box(
+                    title,
+                    &format!(
+                        "Verified installer saved to\n{}\n\nRun it to update Helm.",
+                        path.display()
+                    ),
+                    false,
+                );
+                let _ = helm_win_apps::open_target(&folder.to_string_lossy());
+            }
+            Err(e) => {
+                helm_agent::desktop::message_box(title, &format!("Download failed: {e}"), false);
+            }
+        }
+    })
+    .await;
+}
+
+/// Startup check: log only (no dialogs at sign-in). Skipped when this build has no key.
+fn startup_update_check() {
+    if helm_update::compiled_public_key().is_none() {
+        tracing::info!("update checks disabled: no release key compiled in");
+        return;
+    }
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        if let Ok(status) = tokio::task::spawn_blocking(helm_agent::update::check).await {
+            println!("{}", status.summary());
+            tracing::info!("{}", status.summary());
+        }
+    });
 }
 
 #[cfg(windows)]
@@ -204,6 +275,15 @@ fn toggle_autostart() {
 }
 
 async fn run(args: Args) -> anyhow::Result<()> {
+    // One agent per data folder and session (service-started + Start with Windows).
+    let Some(_instance) = helm_agent::desktop::single_instance(&args.data_dir) else {
+        println!(
+            "Helm agent is already running for {}.",
+            args.data_dir.display()
+        );
+        tracing::info!("another agent already runs for this data folder; exiting");
+        return Ok(());
+    };
     let mut config = Config::new(&args.data_dir);
     config.port = args.port;
     config.enable_mdns = args.mdns;
@@ -263,12 +343,18 @@ async fn run(args: Args) -> anyhow::Result<()> {
     #[cfg(not(windows))]
     let (_tray_tx, mut tray_rx) = tokio::sync::mpsc::unbounded_channel::<NoTrayCommand>();
     #[cfg(windows)]
-    let tray: Option<TrayHandle> = if args.tray { start_tray(tray_tx) } else { None };
+    let tray: Option<TrayHandle> = if args.tray {
+        start_tray(tray_tx, args.background).await
+    } else {
+        None
+    };
     #[cfg(not(windows))]
     let tray: Option<TrayHandle> = None;
     if args.background && tray.is_none() {
         bail!("--background needs the tray icon, which could not be created");
     }
+
+    startup_update_check();
 
     let mut stdin_open = true;
     loop {
@@ -297,6 +383,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
                             open_with_shell(server.data_dir().to_path_buf()).await;
                         }
                         TrayCommand::ToggleAutostart => toggle_autostart(),
+                        TrayCommand::CheckUpdates => {
+                            tokio::spawn(check_updates_interactive());
+                        }
                         TrayCommand::Quit => break,
                     }
                 }
@@ -322,7 +411,18 @@ fn main() -> anyhow::Result<()> {
     match &args.command {
         Command::Devices => return list_devices(&args),
         Command::Revoke(id) => return revoke_device(&args, id),
+        Command::CheckUpdate => {
+            println!("{}", helm_agent::update::check().summary());
+            return Ok(());
+        }
         Command::Run => {}
+    }
+    if helm_agent::desktop::current_session_id() == Some(0) {
+        // Session 0 has no desktop: input, capture and the tray cannot work there.
+        bail!(
+            "helm-agent is running in session 0 (the services session). Install it with \
+             helm-service, which starts the agent in the signed-in user's session."
+        );
     }
     #[cfg(windows)]
     if args.background {
@@ -332,13 +432,27 @@ fn main() -> anyhow::Result<()> {
             let _ = windows::Win32::System::Console::FreeConsole();
         }
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .init();
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+    };
+    // No console in background mode: log to <data dir>\agent.log instead.
+    match args
+        .background
+        .then(|| helm_agent::desktop::open_log(&args.data_dir).ok())
+        .flatten()
+    {
+        Some((file, _)) => tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        None => tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_target(false)
+            .init(),
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

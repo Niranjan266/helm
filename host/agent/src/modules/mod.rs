@@ -13,6 +13,7 @@ pub mod files;
 pub mod layout;
 pub mod media;
 pub mod power;
+pub mod relay;
 pub mod screen;
 pub mod system;
 
@@ -28,6 +29,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(clipboard::ClipboardModule),
         Arc::new(files::FilesModule),
         Arc::new(screen::ScreenModule),
+        Arc::new(relay::RelayModule),
     ]
 }
 
