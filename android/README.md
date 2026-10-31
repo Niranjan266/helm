@@ -51,13 +51,34 @@ app/src/main/java/com/niranjan/helm/
                         plugins, triggers, Home Assistant states
     TermScreen.kt       VT100/xterm screen model (SGR colours, cursor, erase, scrollback)
     HelmApiP5.kt        feature-gated calls for every §13 method + pen tilt maths
+    Reconnector.kt      auto-reconnect state machine: backoff 0.5 s -> 30 s, retry now on
+                        network-available / fresh mDNS result, stop on disconnect, forget or
+                        a refusal (auth only, never re-pairs)
   device/   Android pieces: Keystore signer, stores, NSD discovery, settings, icon disk cache,
             content-URI reading and gallery/Downloads saving, VideoDecoder (MediaCodec ->
             SurfaceView) and AudioPlayer (Opus MediaCodec -> low-latency AudioTrack)
   ui/       Compose (Material 3): Home, RemoteShell (drawer + rail/bottom bar) and the Dock,
             Apps, Touchpad, Media & Controls, Deck, Files, Settings screens
-  HelmApp.kt            app-scoped holder for identity, stores, discovery and the connection
+    Theme.kt            "Blueprint" theme: tokens (blueprint / whiteprint / deep = dark / light /
+                        AMOLED), Archivo + IBM Plex + Comic Neue type, square shapes, grid paper
+    Widgets.kt          shared pieces: SheetStrip, FigBox, PencilButton, OutlineButton, MonoChip,
+                        DiamondSlider, Speech bubble, HelmMark
+  HelmApp.kt            app-scoped holder for identity, stores, discovery, the connection and
+                        auto-reconnect (ConnectivityManager + NSD triggers, saved-address update)
 ```
+
+## Connection self-healing
+
+On launch the app connects to the PC used last (the PC list stays up until it is ready). When the
+control connection drops (Wi-Fi change, PC restart, phone asleep) the screens stay as they are with
+a "Reconnecting…" banner, and the app retries the same PC, identified by its `host_id` and pinned
+certificate: after 0.5 s, then doubling to a 30 s cap, and at once when a network comes up or mDNS
+reports that `host_id` (that fresh address is tried first). A successful reconnect saves the address
+it used. Retrying stops when you disconnect or forget the PC, or when the PC refuses this phone
+(`unknown_device`, `bad_signature`): it only ever authenticates, never re-pairs. Android cannot read
+other devices' MAC addresses; the saved MACs are only used for Wake-on-LAN.
+
+Fonts: see [`FONTS.md`](FONTS.md) (all OFL, bundled in `res/font`).
 
 ## Build
 

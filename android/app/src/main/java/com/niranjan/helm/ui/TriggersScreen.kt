@@ -13,9 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -53,7 +51,7 @@ fun TriggersScreen(vm: ExtrasViewModel) {
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = list != null, onClick = {
+            PencilButton(enabled = list != null, onClick = {
                 editing = Trigger(UUID.randomUUID().toString().take(8), TriggerWhen.Time("08:00 weekdays"), DeckAction.Media("play"))
             }) { Text("Add trigger") }
             TextButton(onClick = vm::loadTriggers) { Text("Refresh") }
@@ -63,7 +61,7 @@ fun TriggersScreen(vm: ExtrasViewModel) {
             list.isEmpty() -> HintText("No triggers. Add one to run an action at a time, when an app starts, when this phone connects or on a Wi-Fi network.")
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                 items(list, key = { it.id }) { t ->
-                    Card(Modifier.fillMaxWidth().clickable { editing = t }) {
+                    BpCard(Modifier.fillMaxWidth().clickable { editing = t }) {
                         Column(Modifier.padding(12.dp)) {
                             Text(describeWhen(t.`when`, vm.myDeviceId), style = MaterialTheme.typography.titleSmall)
                             Text("→ " + kindLabel(kindOf(t.action)) + valueOf(t.action).takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty(),
@@ -140,7 +138,7 @@ private fun TriggerEditor(
                 Text("When", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(W_TIME to "Time", W_APP to "App starts", W_PHONE to "Phone connects", W_WIFI to "Wi-Fi").forEach { (k, l) ->
-                        FilterChip(selected = wKind == k, onClick = { wKind = k }, label = { Text(l) })
+                        BpFilterChip(selected = wKind == k, onClick = { wKind = k }, label = { Text(l) })
                     }
                 }
                 when (wKind) {
@@ -151,8 +149,8 @@ private fun TriggerEditor(
                     }
                     W_APP -> OutlinedTextField(exe, { exe = it }, label = { Text("Program, e.g. obs64.exe") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     W_PHONE -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(selected = anyPhone, onClick = { anyPhone = true }, label = { Text("Any phone") })
-                        FilterChip(selected = !anyPhone, onClick = { anyPhone = false }, label = { Text("This phone") })
+                        BpFilterChip(selected = anyPhone, onClick = { anyPhone = true }, label = { Text("Any phone") })
+                        BpFilterChip(selected = !anyPhone, onClick = { anyPhone = false }, label = { Text("This phone") })
                     }
                     W_WIFI -> OutlinedTextField(ssid, { ssid = it }, label = { Text("PC's Wi-Fi network name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     else -> HintText("Made elsewhere; kept as-is: ${TriggerWhen.describe(w0)}")
@@ -160,7 +158,7 @@ private fun TriggerEditor(
                 Text("Do", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     kinds.forEach { k ->
-                        FilterChip(selected = kind == k, onClick = { if (kind != k) { kind = k; value = defaultValue(k) } }, label = { Text(kindLabel(k)) })
+                        BpFilterChip(selected = kind == k, onClick = { if (kind != k) { kind = k; value = defaultValue(k) } }, label = { Text(kindLabel(k)) })
                     }
                 }
                 when (kind) {

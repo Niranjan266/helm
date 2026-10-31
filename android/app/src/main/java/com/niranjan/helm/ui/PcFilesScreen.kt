@@ -14,11 +14,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,7 +52,7 @@ fun PcFilesScreen(remote: RemoteViewModel, power: PowerViewModel) {
     if (!unlocked) {
         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             HintText("Browsing the PC's files is an admin action.")
-            Button(onClick = { gate("Browse the PC's files") { unlocked = true; power.browse(ui.fsPath) } }) { Text("Open file browser") }
+            PencilButton(onClick = { gate("Browse the PC's files") { unlocked = true; power.browse(ui.fsPath) } }) { Text("Open file browser") }
         }
         return
     }
@@ -62,10 +60,10 @@ fun PcFilesScreen(remote: RemoteViewModel, power: PowerViewModel) {
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(ui.fsPath.ifEmpty { "This PC" }, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(enabled = ui.fsPath.isNotEmpty(), onClick = power::up) { Text("↑ Up") }
-            OutlinedButton(onClick = power::refreshFolder) { Text("Refresh") }
-            OutlinedButton(enabled = ui.fsPath.isNotEmpty(), onClick = { newFolder = "" }) { Text("New folder") }
-            OutlinedButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text("Upload") }
+            OutlineButton(enabled = ui.fsPath.isNotEmpty(), onClick = power::up) { Text("↑ Up") }
+            OutlineButton(onClick = power::refreshFolder) { Text("Refresh") }
+            OutlineButton(enabled = ui.fsPath.isNotEmpty(), onClick = { newFolder = "" }) { Text("New folder") }
+            OutlineButton(onClick = { pick.launch(arrayOf("*/*")) }) { Text("Upload") }
         }
         rui.transfer?.let { t ->
             Text(t.label, style = MaterialTheme.typography.bodySmall)

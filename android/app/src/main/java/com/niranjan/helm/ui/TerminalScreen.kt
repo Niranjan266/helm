@@ -15,10 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -128,12 +125,12 @@ fun TerminalScreen(vm: ExtrasViewModel) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Shells.ALL.forEach { s ->
-                FilterChip(selected = shell == s, onClick = { shell = s }, label = { Text(if (s == Shells.CMD) "cmd" else "PowerShell") })
+                BpFilterChip(selected = shell == s, onClick = { shell = s }, label = { Text(if (s == Shells.CMD) "cmd" else "PowerShell") })
             }
-            Button(enabled = !t.opening, onClick = {
+            PencilButton(enabled = !t.opening, onClick = {
                 gate("Open a $shell terminal on the PC") { vm.openTerminal(shell, grid.first, grid.second) }
             }) { Text(if (t.termId == null || t.exited) "Open" else "Restart") }
-            if (t.termId != null && !t.exited) OutlinedButton(onClick = vm::closeTerminal) { Text("Close") }
+            if (t.termId != null && !t.exited) OutlineButton(onClick = vm::closeTerminal) { Text("Close") }
             Text("${grid.first}×${grid.second}", style = MaterialTheme.typography.labelSmall)
         }
         Box(
@@ -210,7 +207,7 @@ private fun TermKeyRow(ctrl: Boolean, onCtrl: (Boolean) -> Unit, enabled: Boolea
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        FilterChip(selected = ctrl, enabled = enabled, onClick = { onCtrl(!ctrl) }, label = { Text("Ctrl") })
+        BpFilterChip(selected = ctrl, enabled = enabled, onClick = { onCtrl(!ctrl) }, label = { Text("Ctrl") })
         keys.forEach { (label, seq) -> AssistChip(enabled = enabled, onClick = { send(seq) }, label = { Text(label) }) }
     }
 }

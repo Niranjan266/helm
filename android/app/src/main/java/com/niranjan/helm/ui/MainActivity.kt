@@ -9,7 +9,10 @@ import androidx.fragment.app.FragmentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.DisposableEffect
+import com.niranjan.helm.core.ConnectionState
 import androidx.activity.viewModels
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.LaunchedEffect
@@ -54,7 +57,11 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (savedInstanceState == null) handleIntent(intent)
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+            // Launch: go straight back to the PC used last (the list stays up until it is ready).
+            (application as HelmApp).controller.autoConnectLast()
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
@@ -63,12 +70,20 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             val settings by vm.settings.collectAsStateWithLifecycle()
-            HelmTheme(amoled = settings.theme == ThemeMode.AMOLED) {
+            val light = settings.theme == ThemeMode.LIGHT
+            DisposableEffect(light) {
+                val clear = android.graphics.Color.TRANSPARENT
+                val bars = if (light) SystemBarStyle.light(clear, clear) else SystemBarStyle.dark(clear)
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+                onDispose { }
+            }
+            HelmTheme(mode = settings.theme) {
                 val saved by vm.savedPcs.collectAsStateWithLifecycle()
                 val discovered by vm.discovered.collectAsStateWithLifecycle()
                 val session by vm.session.collectAsStateWithLifecycle()
                 val state by vm.connectionState.collectAsStateWithLifecycle()
                 val ui by vm.ui.collectAsStateWithLifecycle()
+                val reconnect by vm.reconnect.collectAsStateWithLifecycle()
                 val snackbar = remember { SnackbarHostState() }
                 var screen by rememberSaveable { mutableStateOf(Screen.DOCK) }
 
@@ -86,12 +101,18 @@ class MainActivity : FragmentActivity() {
                 }
 
                 val s = session
-                if (s == null) {
+                if (s == null || (s.quiet && state !is ConnectionState.Ready)) {
                     HomeScreen(
                         saved = saved,
                         discovered = discovered,
+                        connectingTo = s?.hostId,
                         snackbar = snackbar,
-                        onConnect = vm::connect,
+                        settings = settings,
+                        onSettings = vm::updateSettings,
+                        onConnect = { pc, target ->
+                            screen = target
+                            vm.connect(pc)
+                        },
                         onForgetLocal = { vm.forgetLocally(it.hostId) },
                         onWake = vm::wake,
                         onScan = ::scanQr,
@@ -105,6 +126,7 @@ class MainActivity : FragmentActivity() {
                         RemoteShell(
                             session = s,
                             state = state,
+                            reconnect = reconnect,
                             sessionUi = ui,
                             settings = effective,
                             snackbar = snackbar,
@@ -128,11 +150,11 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        (application as HelmApp).controller.discovery.start()
+        (application as HelmApp).controller.setUiVisible(true)
     }
 
     override fun onStop() {
-        (application as HelmApp).controller.discovery.stop()
+        (application as HelmApp).controller.setUiVisible(false)
         super.onStop()
     }
 

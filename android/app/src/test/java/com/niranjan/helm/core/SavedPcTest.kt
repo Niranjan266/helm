@@ -43,4 +43,17 @@ class SavedPcTest {
             EndpointPlanner.forSaved(pc, other),
         )
     }
+
+    @Test
+    fun reachedAddressIsRememberedFirstOnce() {
+        assertEquals(
+            listOf("192.168.1.99", "192.168.1.20", "10.0.0.5"),
+            EndpointPlanner.withAddress(pc, Endpoint("192.168.1.99", 47820)),
+        )
+        // Known address, or a different port (kept as last_port only): unchanged.
+        assertEquals(pc.addresses, EndpointPlanner.withAddress(pc, Endpoint("10.0.0.5", 47820)))
+        assertEquals(pc.addresses, EndpointPlanner.withAddress(pc, Endpoint("192.168.1.99", 9)))
+        val many = pc.copy(addresses = (1..8).map { "10.0.0.$it" })
+        assertEquals(EndpointPlanner.MAX_ADDRESSES, EndpointPlanner.withAddress(many, Endpoint("10.0.1.1", 47820)).size)
+    }
 }

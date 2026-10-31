@@ -16,7 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,8 +47,8 @@ fun AppsScreen(remote: RemoteViewModel) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !windowsTab, onClick = { windowsTab = false }, label = { Text("Apps") })
-            FilterChip(selected = windowsTab, onClick = { windowsTab = true }, label = { Text("Open windows (${ui.windows.size})") })
+            BpFilterChip(selected = !windowsTab, onClick = { windowsTab = false }, label = { Text("Apps") })
+            BpFilterChip(selected = windowsTab, onClick = { windowsTab = true }, label = { Text("Open windows (${ui.windows.size})") })
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { if (windowsTab) scope.launch { remote.refreshWindows() } else remote.loadApps(force = true) }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")

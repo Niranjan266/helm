@@ -8,9 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -44,7 +42,7 @@ fun SecurityScreen(main: MainViewModel, power: PowerViewModel) {
                 if (ui.phase3) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Tiers.ALL.forEach { t ->
-                            FilterChip(
+                            BpFilterChip(
                                 selected = d.tier == t,
                                 onClick = {
                                     if (d.tier != t) gate("Change ${d.name} to $t") { power.setTier(d.deviceId, t) { main.refreshDevices() } }
@@ -57,17 +55,17 @@ fun SecurityScreen(main: MainViewModel, power: PowerViewModel) {
                     HintText("Access: ${d.tier}")
                 }
             }
-            OutlinedButton(onClick = main::refreshDevices) { Text("Refresh") }
+            OutlineButton(onClick = main::refreshDevices) { Text("Refresh") }
         }
         if (ui.phase3) {
             SectionCard("Audit log") {
                 val lines = ui.audit
                 if (lines == null) {
-                    OutlinedButton(onClick = { gate("Read the audit log") { power.loadAudit() } }) { Text("Show audit log") }
+                    OutlineButton(onClick = { gate("Read the audit log") { power.loadAudit() } }) { Text("Show audit log") }
                 } else {
                     if (lines.isEmpty()) HintText("No entries.")
                     lines.take(200).forEach { Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
-                    OutlinedButton(onClick = power::loadAudit) { Text("Refresh") }
+                    OutlineButton(onClick = power::loadAudit) { Text("Refresh") }
                 }
             }
         } else {
@@ -84,7 +82,7 @@ fun SecurityScreen(main: MainViewModel, power: PowerViewModel) {
                     Switch(checked = enabled, onCheckedChange = { enabled = it })
                 }
                 OutlinedTextField(url, { url = it }, label = { Text("Relay URL, e.g. wss://relay.example.com") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedButton(enabled = !enabled || url.isNotBlank(), onClick = { gate("Change the relay setting") { power.saveRelay(enabled, url) } }) { Text("Save") }
+                OutlineButton(enabled = !enabled || url.isNotBlank(), onClick = { gate("Change the relay setting") { power.saveRelay(enabled, url) } }) { Text("Save") }
             }
         }
     }

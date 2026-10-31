@@ -25,10 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -173,9 +170,9 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = editMode, onClick = { editMode = !editMode }, label = { Text("Edit") })
+            BpFilterChip(selected = editMode, onClick = { editMode = !editMode }, label = { Text("Edit") })
             if (editMode) {
-                Button(onClick = {
+                PencilButton(onClick = {
                     editing = DeckButton(remote.newId(), "", DeckColors[ui.deck.size % DeckColors.size], action = DeckAction.Hotkey(""))
                 }) { Text("Add button") }
             }
@@ -193,9 +190,9 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
                 Box(
                     Modifier
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(2.dp))
                         .background(parseColor(b.color).copy(alpha = if (on == false) 0.45f else 1f))
-                        .border(if (on == true) 3.dp else 0.dp, Color.White, RoundedCornerShape(16.dp))
+                        .border(if (on == true) 3.dp else 2.dp, if (on == true) Bp.c.pencil else Bp.c.deep, RoundedCornerShape(2.dp))
                         .combinedClickable(
                             onClick = {
                                 if (editMode) {
@@ -285,7 +282,7 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                 Text("Action", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     kinds.forEach { k ->
-                        FilterChip(selected = kind == k, onClick = {
+                        BpFilterChip(selected = kind == k, onClick = {
                             if (kind != k) {
                                 kind = k
                                 value = defaultValue(k)
@@ -298,7 +295,7 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                     "launch" -> {
                         val name = ui.apps?.firstOrNull { it.appId == value }?.name
                         Text(if (value.isEmpty()) "No app chosen" else (name ?: value))
-                        OutlinedButton(onClick = { picking = true }) { Text("Choose app") }
+                        OutlineButton(onClick = { picking = true }) { Text("Choose app") }
                     }
                     "macro" -> {
                         HintText("Runs the steps in order (max ${DeckAction.MAX_MACRO_STEPS}). Add delays between steps if an app needs time.")
@@ -311,7 +308,7 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                                 TextButton(onClick = { steps.removeAt(i) }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
                             }
                         }
-                        OutlinedButton(enabled = steps.size < DeckAction.MAX_MACRO_STEPS, onClick = { steps += StepDraft("delay_ms", "250") }) { Text("Add step") }
+                        OutlineButton(enabled = steps.size < DeckAction.MAX_MACRO_STEPS, onClick = { steps += StepDraft("delay_ms", "250") }) { Text("Add step") }
                     }
                     "repeat" -> {
                         OutlinedTextField(
@@ -326,19 +323,19 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                 if (p3) {
                     Text("Show live state", style = MaterialTheme.typography.labelLarge)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(selected = stateBind == null, onClick = { stateBind = null }, label = { Text("None") })
-                        DeckAction.STATE_BINDS.forEach { s -> FilterChip(selected = stateBind == s, onClick = { stateBind = s }, label = { Text(bindLabel(s)) }) }
+                        BpFilterChip(selected = stateBind == null, onClick = { stateBind = null }, label = { Text("None") })
+                        DeckAction.STATE_BINDS.forEach { s -> BpFilterChip(selected = stateBind == s, onClick = { stateBind = s }, label = { Text(bindLabel(s)) }) }
                     }
                     Text("Live widget", style = MaterialTheme.typography.labelLarge)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(selected = widget == null, onClick = { widget = null }, label = { Text("None") })
-                        DeckAction.WIDGETS.forEach { w -> FilterChip(selected = widget == w, onClick = { widget = w }, label = { Text(widgetLabel(w)) }) }
+                        BpFilterChip(selected = widget == null, onClick = { widget = null }, label = { Text("None") })
+                        DeckAction.WIDGETS.forEach { w -> BpFilterChip(selected = widget == w, onClick = { widget = w }, label = { Text(widgetLabel(w)) }) }
                     }
                 }
                 if (!isNew) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { remote.moveDeckButton(button.id, -1) }) { Text("◀ Move") }
-                        OutlinedButton(onClick = { remote.moveDeckButton(button.id, +1) }) { Text("Move ▶") }
+                        OutlineButton(onClick = { remote.moveDeckButton(button.id, -1) }) { Text("◀ Move") }
+                        OutlineButton(onClick = { remote.moveDeckButton(button.id, +1) }) { Text("Move ▶") }
                     }
                     TextButton(onClick = { remote.deleteDeckButton(button.id); onDismiss() }) {
                         Text("Delete button", color = MaterialTheme.colorScheme.error)
@@ -382,7 +379,7 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
 private fun StepEditor(step: StepDraft, onChange: (StepDraft) -> Unit) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         STEP_KINDS.forEach { k ->
-            FilterChip(selected = step.kind == k, onClick = { if (step.kind != k) onChange(StepDraft(k, defaultValue(k))) }, label = { Text(kindLabel(k)) })
+            BpFilterChip(selected = step.kind == k, onClick = { if (step.kind != k) onChange(StepDraft(k, defaultValue(k))) }, label = { Text(kindLabel(k)) })
         }
     }
     SimpleValueEditor(step.kind, step.value) { onChange(step.copy(value = it)) }
@@ -396,7 +393,7 @@ internal fun SimpleValueEditor(kind: String, value: String, onValue: (String) ->
         "launch" -> OutlinedTextField(value, onValue, label = { Text("App id") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         "open" -> OutlinedTextField(value, onValue, label = { Text("URL, folder or file on the PC") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         "media" -> Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            DeckAction.MEDIA_ACTIONS.forEach { m -> FilterChip(selected = value == m, onClick = { onValue(m) }, label = { Text(m.replace('_', ' ')) }) }
+            DeckAction.MEDIA_ACTIONS.forEach { m -> BpFilterChip(selected = value == m, onClick = { onValue(m) }, label = { Text(m.replace('_', ' ')) }) }
         }
         "volume_step" -> OutlinedTextField(
             value, onValue, label = { Text("Step (-1..1), e.g. 0.05 or -0.05") }, singleLine = true,
@@ -417,8 +414,8 @@ internal fun SimpleValueEditor(kind: String, value: String, onValue: (String) ->
 private fun RemotePicker(value: String, onValue: (String) -> Unit) {
     val isScene = value.startsWith(DeckAction.OBS_SCENE_PREFIX)
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        DeckAction.REMOTE_COMMANDS.forEach { c -> FilterChip(selected = value == c, onClick = { onValue(c) }, label = { Text(c) }) }
-        FilterChip(selected = isScene, onClick = { if (!isScene) onValue(DeckAction.OBS_SCENE_PREFIX) }, label = { Text("obs.scene") })
+        DeckAction.REMOTE_COMMANDS.forEach { c -> BpFilterChip(selected = value == c, onClick = { onValue(c) }, label = { Text(c) }) }
+        BpFilterChip(selected = isScene, onClick = { if (!isScene) onValue(DeckAction.OBS_SCENE_PREFIX) }, label = { Text("obs.scene") })
     }
     if (isScene) {
         OutlinedTextField(

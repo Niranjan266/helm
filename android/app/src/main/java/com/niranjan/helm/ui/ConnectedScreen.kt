@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -16,7 +17,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,7 +25,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -63,16 +62,30 @@ fun ConnectedScreen(
     var confirmForget by remember { mutableStateOf(false) }
     val ready = state as? ConnectionState.Ready
 
+    val c = Bp.c
     Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        contentColor = c.ink,
+        modifier = Modifier.gridPaper(c),
         topBar = {
-            TopAppBar(
-                title = { Text(session.name) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                SquareIconButton(onClick = onBack, contentDescription = "Back to your PCs") {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                }
+                Column(Modifier.weight(1f)) {
+                    DisplayText(session.name, maxLines = 1)
+                    when (state) {
+                        is ConnectionState.Ready -> StatusLine("Connected")
+                        is ConnectionState.Failed -> StatusLine("Not connected", color = c.redInk)
+                        ConnectionState.Closed -> StatusLine("Disconnected", color = c.ink2)
+                        else -> StatusLine(if (session.isPairing) "Pairing…" else "Connecting…", color = c.pencilInk)
                     }
-                },
-            )
+                }
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
@@ -84,6 +97,7 @@ fun ConnectedScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            SheetStrip(if (session.isPairing) "Sheet 00 · Pairing" else "Sheet 00 · Connection")
             StatusCard(state, onRetry, session.isPairing, onBack)
 
             if (ready != null) {
@@ -119,7 +133,7 @@ fun PcDetails(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             InfoCard("Ping") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = onPing, enabled = !ui.pingBusy) { Text("Ping") }
+                    PencilButton(onClick = onPing, enabled = !ui.pingBusy) { Text("Ping") }
                     Spacer(Modifier.width(16.dp))
                     Text(
                         when {
@@ -172,12 +186,12 @@ fun PcDetails(
             }
 
             Spacer(Modifier.height(4.dp))
-            OutlinedButton(
+            OutlineButton(
                 onClick = onRequestForget,
                 enabled = !ui.forgetting,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Forget this PC") }
-            Button(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
+            PencilButton(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
     }
 }
 
@@ -213,10 +227,10 @@ internal fun StatusCard(state: ConnectionState, onRetry: () -> Unit, isPairing: 
                 Spacer(Modifier.height(12.dp))
                 Row {
                     if (!isPairing && state.code != "unknown_device") {
-                        Button(onClick = onRetry) { Text("Retry") }
+                        PencilButton(onClick = onRetry) { Text("Retry") }
                         Spacer(Modifier.width(8.dp))
                     }
-                    OutlinedButton(onClick = onBack) { Text("Back") }
+                    OutlineButton(onClick = onBack) { Text("Back") }
                 }
             }
             ConnectionState.Closed -> {
@@ -224,10 +238,10 @@ internal fun StatusCard(state: ConnectionState, onRetry: () -> Unit, isPairing: 
                 Spacer(Modifier.height(12.dp))
                 Row {
                     if (!isPairing) {
-                        Button(onClick = onRetry) { Text("Reconnect") }
+                        PencilButton(onClick = onRetry) { Text("Reconnect") }
                         Spacer(Modifier.width(8.dp))
                     }
-                    OutlinedButton(onClick = onBack) { Text("Back") }
+                    OutlineButton(onClick = onBack) { Text("Back") }
                 }
             }
         }
@@ -257,34 +271,19 @@ private fun Busy(text: String) {
 
 @Composable
 internal fun InfoCard(title: String, onRefresh: (() -> Unit)? = null, content: @Composable () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    FigBox(
+        title = title,
+        trailing = if (onRefresh != null) "Refresh" else null,
+        trailingColor = Bp.c.pencilInk,
+        onTrailingClick = onRefresh,
         modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f),
-                )
-                if (onRefresh != null) {
-                    IconButton(onClick = onRefresh, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh $title")
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            content()
-        }
-    }
+    ) { content() }
 }
 
 @Composable
 internal fun KeyValue(key: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-        Text(key, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(96.dp))
+        Text(key.uppercase(), style = BpType.mono, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(96.dp).padding(top = 2.dp))
         Text(value)
     }
 }

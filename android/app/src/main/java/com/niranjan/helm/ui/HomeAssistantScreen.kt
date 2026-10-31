@@ -12,11 +12,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,8 +50,8 @@ fun HomeAssistantScreen(vm: ExtrasViewModel, remote: RemoteViewModel) {
 
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { showConfig = !showConfig }) { Text(if (showConfig) "Hide connection" else "Connection") }
-            OutlinedButton(enabled = !ui.haLoading, onClick = vm::loadHaStates) { Text(if (ui.haLoading) "Loading…" else "Refresh") }
+            OutlineButton(onClick = { showConfig = !showConfig }) { Text(if (showConfig) "Hide connection" else "Connection") }
+            OutlineButton(enabled = !ui.haLoading, onClick = vm::loadHaStates) { Text(if (ui.haLoading) "Loading…" else "Refresh") }
         }
         if (showConfig || (states == null && !ui.haLoading)) {
             SectionCard("Home Assistant connection") {
@@ -64,7 +61,7 @@ fun HomeAssistantScreen(vm: ExtrasViewModel, remote: RemoteViewModel) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(token, { token = it }, label = { Text("Long-lived access token") }, singleLine = true,
                         visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                    Button(enabled = url.startsWith("http") && token.isNotBlank(), onClick = {
+                    PencilButton(enabled = url.startsWith("http") && token.isNotBlank(), onClick = {
                         gate("Save the Home Assistant connection on the PC") {
                             vm.saveHaConfig(url, token)
                             token = ""
@@ -123,7 +120,7 @@ internal fun HaActionEditor(value: String, onValue: (String) -> Unit) {
         }
     }
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        DeckAction.HA_SERVICES.forEach { svc -> FilterChip(selected = service == svc, onClick = { onValue("$svc $entity") }, label = { Text(svc) }) }
+        DeckAction.HA_SERVICES.forEach { svc -> BpFilterChip(selected = service == svc, onClick = { onValue("$svc $entity") }, label = { Text(svc) }) }
     }
     OutlinedTextField(service, { onValue("${it.trim()} $entity") }, label = { Text("Service, e.g. light.toggle") }, singleLine = true,
         isError = !HaState.validService(service), modifier = Modifier.fillMaxWidth())

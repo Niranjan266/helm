@@ -111,6 +111,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() = controller.disconnect()
 
+    /** Auto-reconnect state for the current PC. */
+    val reconnect = controller.reconnect
+
+    fun reconnectNow() = controller.reconnectNow()
+
     fun forgetLocally(hostId: String) = controller.forget(hostId)
 
     val settings = controller.settings.settings
@@ -162,6 +167,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: HelmException) {
                 _ui.value = _ui.value.copy(pingBusy = false)
                 message("Ping failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Background latency sample for the status line (no busy state, no error message). */
+    fun pingQuiet() {
+        val conn = controller.readyConnection() ?: return
+        viewModelScope.launch {
+            val start = System.nanoTime()
+            try {
+                conn.request("system.ping")
+                _ui.value = _ui.value.copy(pingMs = (System.nanoTime() - start) / 1_000_000)
+            } catch (_: HelmException) {
             }
         }
     }
