@@ -38,6 +38,20 @@ Android app ──(mDNS: _helm._tcp)──▶ finds PC
 | `Docs/PLAN.md` | Research, full feature list, architecture and roadmap |
 | `Docs/PROTOCOL.md` | Phone ↔ PC protocol |
 
+## Install
+
+**Windows** — paste into PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Niranjan266/helm/main/scripts/install.ps1 | iex
+```
+
+It downloads the newest release, checks its SHA-256, installs to `%LOCALAPPDATA%\Programs\Helm`,
+adds a Start menu entry and starts Helm in the tray. Run it again to update.
+
+**Android** — download `Helm-android-debug.apk` from
+[Releases](https://github.com/Niranjan266/helm/releases) and install it.
+
 ## Quick start (developers)
 
 ```bash
