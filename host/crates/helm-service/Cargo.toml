@@ -1,0 +1,27 @@
+[package]
+name = "helm-service"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Helm: Windows service (HelmService) that runs the agent in the active console session"
+license = "MIT"
+publish = false
+
+[lib]
+name = "helm_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "helm-service"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Environment",
+    "Win32_System_JobObjects",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+] }
