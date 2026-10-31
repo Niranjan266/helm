@@ -124,16 +124,22 @@ impl ServerCertVerifier for PinnedVerifier {
     }
 }
 
-pub async fn try_connect_path(port: u16, fingerprint: &str, path: &str) -> anyhow::Result<Ws> {
+/// TLS client config that pins `fingerprint` (no CA or hostname checks), like the phone.
+pub fn pinned_client_config(fingerprint: &str) -> rustls::ClientConfig {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()?
+    rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .unwrap()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedVerifier {
             fingerprint: fingerprint.to_string(),
             provider,
         }))
-        .with_no_client_auth();
+        .with_no_client_auth()
+}
+
+pub async fn try_connect_path(port: u16, fingerprint: &str, path: &str) -> anyhow::Result<Ws> {
+    let config = pinned_client_config(fingerprint);
     let tcp = TcpStream::connect(("127.0.0.1", port)).await?;
     let tls = TlsConnector::from(Arc::new(config))
         .connect(ServerName::try_from("helm-agent.local")?, tcp)
