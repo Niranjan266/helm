@@ -1,0 +1,249 @@
+//! `helm-agent` command line.
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+use anyhow::{Context, bail};
+use helm_agent::devices::DeviceStore;
+use helm_agent::{Config, ServerHandle, audit::AuditLog, qr};
+
+const USAGE: &str = "\
+helm-agent — Helm PC agent
+
+USAGE:
+    helm-agent [OPTIONS]                 run the agent
+    helm-agent devices [OPTIONS]         list paired devices and exit
+    helm-agent revoke <device_id> [OPTIONS]
+                                         remove a paired device and exit
+
+OPTIONS:
+    --data-dir <path>   data folder (default %APPDATA%\\Helm)
+    --port <n>          TCP port (default 47820; 0 = any free port)
+    --no-mdns           do not advertise on the local network
+    --pair              show a pairing QR at start even if devices are paired
+    -h, --help          show this help
+    -V, --version       show the version
+
+While running, type  p + Enter  for a fresh pairing QR,  q + Enter  to quit.";
+
+enum Command {
+    Run,
+    Devices,
+    Revoke(String),
+}
+
+struct Args {
+    command: Command,
+    data_dir: PathBuf,
+    port: u16,
+    mdns: bool,
+    pair: bool,
+}
+
+fn parse_args() -> anyhow::Result<Option<Args>> {
+    let mut args = Args {
+        command: Command::Run,
+        data_dir: helm_agent::default_data_dir(),
+        port: helm_agent::DEFAULT_PORT,
+        mdns: true,
+        pair: false,
+    };
+    let mut positional: Vec<String> = Vec::new();
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-h" | "--help" | "help" => {
+                println!("{USAGE}");
+                return Ok(None);
+            }
+            "-V" | "--version" => {
+                println!("helm-agent {}", env!("CARGO_PKG_VERSION"));
+                return Ok(None);
+            }
+            "--data-dir" => {
+                args.data_dir = PathBuf::from(it.next().context("--data-dir needs a path")?);
+            }
+            "--port" => {
+                let v = it.next().context("--port needs a number")?;
+                args.port = v.parse().with_context(|| format!("bad port {v:?}"))?;
+            }
+            "--no-mdns" => args.mdns = false,
+            "--pair" => args.pair = true,
+            other if other.starts_with('-') => bail!("unknown option {other}\n\n{USAGE}"),
+            other => positional.push(other.to_string()),
+        }
+    }
+    args.command = match positional.as_slice() {
+        [] => Command::Run,
+        [cmd] if cmd == "devices" => Command::Devices,
+        [cmd, id] if cmd == "revoke" => Command::Revoke(id.clone()),
+        [cmd] if cmd == "revoke" => bail!("revoke needs a device_id (see `helm-agent devices`)"),
+        _ => bail!("unexpected arguments {positional:?}\n\n{USAGE}"),
+    };
+    Ok(Some(args))
+}
+
+fn format_time(ms: i64) -> String {
+    time::OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
+        .ok()
+        .and_then(|t| {
+            t.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+        .unwrap_or_else(|| ms.to_string())
+}
+
+fn list_devices(args: &Args) -> anyhow::Result<()> {
+    let devices = DeviceStore::new(&args.data_dir).list()?;
+    if devices.is_empty() {
+        println!("No paired devices (data dir {}).", args.data_dir.display());
+        return Ok(());
+    }
+    println!("Paired devices ({}):", args.data_dir.display());
+    for d in devices {
+        println!(
+            "  {}  {:<24} tier={:<6} paired={} last_seen={}",
+            d.device_id,
+            d.device_name,
+            d.tier.as_str(),
+            format_time(d.paired_at_ms),
+            format_time(d.last_seen_ms)
+        );
+    }
+    Ok(())
+}
+
+fn revoke_device(args: &Args, device_id: &str) -> anyhow::Result<()> {
+    let store = DeviceStore::new(&args.data_dir);
+    if store.revoke(device_id)? {
+        AuditLog::new(&args.data_dir).record("revoke", Some(device_id), Some("cli"), "by=cli");
+        println!("Revoked {device_id}. It must pair again to connect.");
+        Ok(())
+    } else {
+        bail!("no paired device with id {device_id}")
+    }
+}
+
+fn show_pairing(server: &ServerHandle) {
+    let pairing = server.new_pairing();
+    let svg_path = server.data_dir().join("pair-qr.svg");
+    match qr::to_unicode(&pairing.uri) {
+        Ok(text) => println!("\n{text}"),
+        Err(e) => eprintln!("could not draw QR: {e:#}"),
+    }
+    match qr::to_svg(&pairing.uri).and_then(|svg| {
+        helm_agent::util::atomic_write(&svg_path, svg.as_bytes())?;
+        Ok(())
+    }) {
+        Ok(()) => println!("QR image:     {}", svg_path.display()),
+        Err(e) => eprintln!("could not write {}: {e:#}", svg_path.display()),
+    }
+    let minutes = pairing
+        .expires_at
+        .saturating_duration_since(Instant::now())
+        .as_secs()
+        .div_ceil(60);
+    println!("Pairing link: {}", pairing.uri);
+    println!(
+        "Scan it with the Helm app. Valid for {minutes} min, one use. Type p + Enter for a new one.\n"
+    );
+}
+
+async fn run(args: Args) -> anyhow::Result<()> {
+    let mut config = Config::new(&args.data_dir);
+    config.port = args.port;
+    config.enable_mdns = args.mdns;
+    let server = helm_agent::start(config).await?;
+
+    println!();
+    println!("Helm agent {} is running.", env!("CARGO_PKG_VERSION"));
+    println!("  PC name:      {}", server.host_name());
+    println!("  Host id:      {}", server.host_id());
+    println!("  Port:         {}", server.port());
+    let addrs: Vec<String> = server.addresses().iter().map(|a| a.to_string()).collect();
+    println!(
+        "  Addresses:    {}",
+        if addrs.is_empty() {
+            "(none found)".to_string()
+        } else {
+            addrs.join(", ")
+        }
+    );
+    println!("  Fingerprint:  {}", server.fingerprint());
+    println!("  Data folder:  {}", server.data_dir().display());
+    println!("  Commands:     p + Enter = new pairing QR, q + Enter = quit, Ctrl+C = quit");
+
+    let paired = server.devices().map(|d| d.len()).unwrap_or(0);
+    if paired == 0 || args.pair {
+        if paired == 0 {
+            println!("\nNo devices paired yet.");
+        }
+        show_pairing(&server);
+    } else {
+        println!("\n{paired} paired device(s). Type p + Enter to pair another phone.\n");
+    }
+
+    // Console commands come from a blocking reader thread.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if line_tx.send(line.trim().to_ascii_lowercase()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            line = line_rx.recv() => match line.as_deref() {
+                Some("p") | Some("pair") => show_pairing(&server),
+                Some("q") | Some("quit") | Some("exit") => break,
+                Some("") => {}
+                Some(other) => println!("unknown command {other:?} (p = pair, q = quit)"),
+                // stdin closed (e.g. running without a console): keep serving until Ctrl+C.
+                None => {
+                    let _ = tokio::signal::ctrl_c().await;
+                    break;
+                }
+            }
+        }
+    }
+
+    println!("Stopping…");
+    let svg_path = server.data_dir().join("pair-qr.svg");
+    server.shutdown().await;
+    // The QR holds a pairing token; don't leave it lying around.
+    let _ = std::fs::remove_file(svg_path);
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    let Some(args) = parse_args()? else {
+        return Ok(());
+    };
+    match &args.command {
+        Command::Devices => return list_devices(&args),
+        Command::Revoke(id) => return revoke_device(&args, id),
+        Command::Run => {}
+    }
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .init();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(args))
+}
