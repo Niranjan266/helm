@@ -152,7 +152,64 @@ lower tiers with `forbidden`. Phase 0 pairs every device as `admin`.
 | `devices.list` | admin | `{}` | `{"devices":[{"device_id","device_name","tier","paired_at_ms","last_seen_ms","this":bool}]}` |
 | `devices.revoke` | admin | `{"device_id"}` | `{"revoked":true}` — a device may revoke itself (= "forget this PC") |
 
-## 9. Storage on the PC
+## 9. Phase 1 additions (protocol v1, feature `p1`)
+
+`hello` gains `"features":["p1"]`. Older phones ignore it.
+
+### 9.1 Input frames (no reply)
+`{"type":"in","k":…}` — remote tier. Kinds (same as `helm-win-input` `InputEvent`):
+`mm{dx,dy}` relative move (f32 px) · `mb{button:left|right|middle|x1|x2,down}` ·
+`ms{dx,dy}` scroll in notches, `dy>0` = up, `dx>0` = right · `kd{vk}` / `ku{vk}` ·
+`tx{text}` · `sc{keys:[vk…]}` shortcut. The agent releases all held keys/buttons when the
+socket closes. Errors are reported once as event `input.error{code}` (`blocked_by_elevation`).
+
+### 9.2 Binary frames (file data)
+`[16 bytes transfer id][8 bytes offset, big-endian][data ≤ 256 KiB]`.
+
+### 9.3 Methods
+
+| method | tier | params → result |
+|---|---|---|
+| `apps.list` | viewer | → `{apps:[{app_id,name,kind:"packaged"|"desktop"}]}` |
+| `apps.icon` | viewer | `{app_id,size}` → `{png:"<base64>"}` |
+| `apps.launch` | remote | `{app_id}` → `{}` |
+| `open` | remote | `{target}` (http/https/mailto URL or existing absolute path) → `{}` |
+| `windows.list` | viewer | → `{windows:[{hwnd,title,pid,app_id,is_minimized,is_foreground}]}` |
+| `windows.focus` | remote | `{hwnd}` → `{focused,method}` |
+| `windows.minimize` / `maximize` / `restore` / `close` | remote | `{hwnd}` → `{}` |
+| `dock.get` | viewer | → `{pages:[[tile…]…]}` tile = `{id,kind:"app"|"open",app_id?,target?,label?}` |
+| `dock.set` | remote | `{pages}` → `{}` (broadcasts `dock.changed`) |
+| `media.state` | viewer | → `{state: MediaState|null}` |
+| `media.artwork` | viewer | → `{png:"<base64>"|null}` |
+| `media.control` | remote | `{action:"play"|"pause"|"toggle_play_pause"|"next"|"previous"|"stop"|{"seek_ms":n}}` → `{}` |
+| `audio.get` | viewer | → `{level,muted}` |
+| `audio.set` | remote | `{level?,muted?}` → `{}` |
+| `display.brightness.list` | viewer | → `{displays:[{id,name,kind,level,supported}]}` |
+| `display.brightness.set` | remote | `{id,level}` → `{}` |
+| `power.action` | admin | `{action:"lock"|"sleep"|"hibernate"|"restart"|"shutdown"|"sign_out",delay_s?}` → `{scheduled:{action,due_unix_ms}|null}` |
+| `power.cancel` / `power.status` | admin / viewer | → `{scheduled:…|null}` |
+| `deck.get` | viewer | → `{buttons:[{id,label,color,icon?,action}]}` |
+| `deck.set` | remote | `{buttons}` → `{}` (broadcasts `deck.changed`) |
+| `deck.run` | remote | `{id}` → `{}` |
+| `clipboard.get` | remote | → `{text?,png?}` |
+| `clipboard.set` | remote | `{text}` or `{png}` → `{}` |
+| `clipboard.watch` | remote | `{on}` → `{}` (then `clipboard.changed{text?,has_image}` events) |
+| `file.upload.begin` | remote | `{name,size,sha256}` → `{transfer_id}` (hex); saved to `Downloads\Helm` |
+| `file.upload.end` | remote | `{transfer_id}` → `{path}` (fails `bad_params` if hash mismatch) |
+| `file.download` | admin | `{path}` → `{transfer_id,size,sha256,name}` then binary frames, then event `file.done{transfer_id}` |
+| `screen.monitors` | viewer | → `{monitors:[{id,name,x,y,width,height,is_primary}]}` |
+| `screen.capture` | remote | `{monitor_id?}` → `{png:"<base64>"}` |
+| `system.info` | viewer | adds `macs:[{mac,adapter_name,locally_administered}]` and `battery` |
+
+Deck `action` = one of `{"hotkey":"ctrl+shift+esc"}`, `{"text":"…"}`, `{"launch":app_id}`,
+`{"open":target}`, `{"media":action}`, `{"volume_step":0.05}`, `{"delay_ms":n}`.
+
+### 9.4 Events (agent → phone)
+`media.changed{state}`, `audio.changed{level,muted}`, `windows.changed{}` (re-list),
+`input.textFocus{focused}`, `dock.changed`, `deck.changed`, `clipboard.changed`,
+`power.scheduled{scheduled}`, `file.done`, `input.error`.
+
+## 10. Storage on the PC
 
 `%APPDATA%\Helm\` (overridable for tests):
 - `identity.json` — `host_id`, cert DER (base64), private key PKCS#8 **encrypted with Windows
