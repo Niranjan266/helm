@@ -1,0 +1,33 @@
+[package]
+name = "helm-update"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Helm: update check against GitHub Releases with SHA-256 + Ed25519 signature verification"
+license = "MIT"
+publish = false
+
+[lib]
+name = "helm_update"
+path = "src/lib.rs"
+
+[features]
+default = ["http"]
+# Real HTTPS fetcher (ureq + rustls). Tests never use it.
+http = ["dep:ureq"]
+
+[dependencies]
+ed25519-dalek = "2.2"
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10"
+thiserror = "2.0"
+ureq = { version = "3", optional = true }
+
+[dev-dependencies]
+getrandom = "0.3"
+
+[[example]]
+name = "helm-sign"
+path = "examples/helm-sign.rs"
