@@ -3,7 +3,17 @@
 The phone side of Helm. Phase 0: find PCs on the LAN, pair by QR code, connect over a
 pinned-TLS WebSocket, remember trusted PCs. Phase 1 (PROTOCOL.md §9): Dock home, apps and
 windows, touchpad + keyboard, media/volume/brightness/power, Deck, files/sharing/clipboard/
-screenshots, Wake-on-LAN, desk-dock settings. The wire contract is
+screenshots, Wake-on-LAN, desk-dock settings. Phase 2 (§10, feature `p2`): the Screen tab —
+live H.264 screen + Opus audio over a second pinned-TLS `/stream` socket, trackpad or
+direct-touch input, pinch-zoom/pan, keyboard overlay, monitor picker, quality presets, stats
+overlay and auto-reconnect. Phase 3 (§11, feature `p3`): Monitor (live `stats.tick` charts,
+alerts editor -> Android notifications), task manager, per-app mixer, window snap/move and
+virtual desktops, deck macros/repeat/app remotes/live state/widgets, profiles, PC file browser,
+access levels + audit log, biometric check before admin actions, home-screen widget, Quick
+Settings tiles (lock PC, mute) and a persistent media notification. Phase 4 (§12, `p4`): relay
+fallback (pinned TLS inside the relay tunnel, never pairing), PC switcher with per-PC settings,
+wake via another awake PC (`wol.send`), gyro air mouse (`gy`) and a "USB"/"Relay" link badge.
+Every p3/p4 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 
 ## Layout
@@ -21,8 +31,19 @@ app/src/main/java/com/niranjan/helm/
     HelmApi.kt          typed calls for every §9.3 method
     Touchpad.kt         acceleration, per-frame move/scroll batching, text-box diff
     WakeOnLan.kt        magic packet, MAC choice, UDP broadcast
+    StreamFrames.kt     §10 binary stream frames (0x01-0x05) parser/encoder
+    H264.kt             Annex-B NAL splitting, SPS parser, decoder (re)configure tracker
+    StreamModels.kt     quality presets, stream.start params/result, stats counter, OpusHead
+    ViewTransform.kt    zoom/pan of the remote screen + direct-touch coordinate mapping
+    StreamSession.kt    stream.start -> /stream auth -> stream.open -> frames, stream.stats
+    Phase3Models.kt     stats, alerts, processes, audio sessions, profiles, fs entries, PcPath
+    HelmApiP3.kt        feature-gated calls for every §11/§12 method
+    Tunnel.kt           relay tunnel v1: connect URL, 64 KiB chunks, mux frame codec, close codes
+    RelayTransport.kt   TunnelSocket (java.net.Socket over the relay WebSocket) + RelayTransport
+    Phase4.kt           gyro air-mouse maths, USB tethering detection
   device/   Android pieces: Keystore signer, stores, NSD discovery, settings, icon disk cache,
-            content-URI reading and gallery/Downloads saving
+            content-URI reading and gallery/Downloads saving, VideoDecoder (MediaCodec ->
+            SurfaceView) and AudioPlayer (Opus MediaCodec -> low-latency AudioTrack)
   ui/       Compose (Material 3): Home, RemoteShell (drawer + rail/bottom bar) and the Dock,
             Apps, Touchpad, Media & Controls, Deck, Files, Settings screens
   HelmApp.kt            app-scoped holder for identity, stores, discovery and the connection
@@ -65,6 +86,13 @@ adb shell am start -a android.intent.action.VIEW -d "'helm://pair?v=1&id=...&t=.
   mismatch, download via binary frames + `file.done`, dock/deck set + change events.
 - `Phase1CodecTest` — input frame shapes, binary frame layout, dock/deck codecs and editing,
   result parsing, Wake-on-LAN packet/MAC choice/UDP send, touchpad maths and text diff.
+- `Phase3CodecTest` — mux frames, tunnel chunking, relay URLs, saved-PC relay/prefs, deck
+  macro/repeat/remote/state/widget codecs, alerts/process/profile/fs codecs, paths, gyro, USB.
+- `Phase3ConnectionTest` — every §11/§12 method against the FakeAgent (events included) and
+  feature gating (`unsupported`, nothing sent).
+- `RelayTunnelTest` — a fake relay (MockWebServer + mux framing) in front of a TLS FakeAgent:
+  LAN-fail -> relay auth with real pinned TLS, 700 KB download through the tunnel, the relay
+  sees no plaintext, pin mismatch, host offline (404), `/stream` over relay, pairing refused.
 - `E2eRealAgentTest` — **opt-in**, skipped unless `HELM_E2E_URI` is set (below).
 
 ## Opt-in end-to-end test against the real PC agent

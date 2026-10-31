@@ -135,6 +135,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Remote wake (§12) through another awake Helm PC. */
+    fun wakeVia(pc: SavedPc) {
+        if (pc.macs.isEmpty()) return message("No network address known for ${pc.name} yet. Connect once while it is on.")
+        message("Asking another PC to wake ${pc.name}…")
+        viewModelScope.launch {
+            val by = controller.wakeVia(pc)
+            message(if (by != null) "$by sent the wake signal to ${pc.name}." else "No other awake Helm PC could wake ${pc.name}.")
+        }
+    }
+
+    fun prefsFor(hostId: String): com.niranjan.helm.core.PcPrefs = controller.prefsFor(hostId)
+
+    fun updatePcPrefs(hostId: String, change: (com.niranjan.helm.core.PcPrefs) -> com.niranjan.helm.core.PcPrefs) =
+        controller.updatePcPrefs(hostId, change)
+
     fun ping() {
         val conn = controller.session.value?.connection ?: return
         _ui.value = _ui.value.copy(pingBusy = true)

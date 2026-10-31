@@ -26,6 +26,24 @@ sealed interface InputFrame {
         }
     }
 
+    /** Absolute move (§10 direct touch): [x], [y] in 0..1, normalised to the streamed monitor. */
+    data class AbsMove(val x: Float, val y: Float) : InputFrame {
+        override val kind get() = "ma"
+        override fun toJson() = frame(kind) {
+            put("x", round4(x.coerceIn(0f, 1f)))
+            put("y", round4(y.coerceIn(0f, 1f)))
+        }
+    }
+
+    /** Phase 4 gyro air-mouse delta in PC pixels (handled like `mm`, §12). */
+    data class Gyro(val dx: Float, val dy: Float) : InputFrame {
+        override val kind get() = "gy"
+        override fun toJson() = frame(kind) {
+            put("dx", round2(dx))
+            put("dy", round2(dy))
+        }
+    }
+
     data class Button(val button: MouseButton, val down: Boolean) : InputFrame {
         override val kind get() = "mb"
         override fun toJson() = frame(kind) {
@@ -74,6 +92,9 @@ sealed interface InputFrame {
 
         /** Two decimals keep frames small; the agent accumulates fractions. */
         internal fun round2(v: Float): Float = if (v.isFinite()) (v * 100f).roundToInt() / 100f else 0f
+
+        /** Four decimals = 0.2 px on a 4K monitor; enough for absolute positions. */
+        internal fun round4(v: Float): Float = if (v.isFinite()) (v * 10_000f).roundToInt() / 10_000f else 0f
 
         /** Left click = down then up. */
         fun click(button: MouseButton = MouseButton.LEFT) = listOf(Button(button, true), Button(button, false))

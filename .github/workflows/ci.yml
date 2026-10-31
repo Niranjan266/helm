@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  rust:
+    name: Rust (agent + crates, Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # Each crate has its own Cargo.toml/target, so cache every target dir.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            host/agent -> target
+            host/crates/helm-service -> target
+            host/crates/helm-update -> target
+            host/crates/helm-win-apps -> target
+            host/crates/helm-win-audio -> target
+            host/crates/helm-win-capture -> target
+            host/crates/helm-win-input -> target
+            host/crates/helm-win-sysmon -> target
+            host/crates/helm-win-system -> target
+
+      # Plain `cargo test` never runs #[ignore] tests (they need real hardware/desktop).
+      - name: Test and clippy every Rust package
+        shell: pwsh
+        run: |
+          $dirs = @('host/agent') + (Get-ChildItem host/crates -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') } |
+            Sort-Object Name | ForEach-Object { "host/crates/$($_.Name)" })
+          $failed = @()
+          foreach ($d in $dirs) {
+            Write-Host "::group::$d cargo test"
+            Push-Location $d
+            cargo test
+            if ($LASTEXITCODE -ne 0) { $failed += "$d (test)" }
+            Write-Host "::endgroup::"
+            Write-Host "::group::$d cargo clippy"
+            cargo clippy --all-targets -- -D warnings
+            if ($LASTEXITCODE -ne 0) { $failed += "$d (clippy)" }
+            Pop-Location
+            Write-Host "::endgroup::"
+          }
+          if ($failed.Count -gt 0) {
+            $failed | ForEach-Object { Write-Host "::error::failed: $_" }
+            exit 1
+          }
+
+  relay:
+    name: Relay (npm test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+
+  android:
+    name: Android (unit tests + assembleDebug)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew
+      # HELM_E2E_URI is not set here, so E2eRealAgentTest skips itself.
+      - run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: android/app/build/reports/tests/
+          retention-days: 7

@@ -108,6 +108,34 @@ class E2eRealAgentTest {
             log("agent does not advertise p1; skipping Phase 1 read-only checks")
         }
 
+        // 4c. Phase 2: a 720p30 stream must deliver a keyframe within 3 s.
+        if (authConn.supportsPhase2) {
+            val session = StreamSession(
+                control = authConn,
+                openStreamSocket = { sink ->
+                    HelmConnection(
+                        uri.hostId, uri.fingerprint, listOf(ready2.endpoint), identity, HandshakeMode.Auth,
+                        path = Endpoint.STREAM_PATH, binarySink = sink,
+                    )
+                },
+                sink = { },
+            )
+            val t = System.nanoTime()
+            val info = try {
+                session.start(StreamRequest(StreamPreset.P720_30, audio = false))
+            } catch (e: HelmException) {
+                throw AssertionError("stream.start failed: ${e.code}: ${e.message}", e)
+            }
+            log("stream.start: ${info.width}x${info.height}@${info.fps} ${info.codec} (${info.encoder})")
+            val deadline = System.currentTimeMillis() + 3_000
+            while (session.keyframesReceived == 0L && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            log("first keyframe after ${(System.nanoTime() - t) / 1_000_000} ms; ${session.framesReceived} video frames")
+            session.stop()
+            assertTrue("no keyframe within 3 s", session.keyframesReceived > 0)
+        } else {
+            log("agent does not advertise p2; skipping stream check")
+        }
+
         // 5. Revoke ourselves ("forget this PC").
         val revoked = authConn.request("devices.revoke", buildJsonObject { put("device_id", identity.deviceId) })
         log("devices.revoke: $revoked")

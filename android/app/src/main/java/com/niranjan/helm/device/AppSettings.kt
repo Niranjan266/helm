@@ -15,6 +15,14 @@ data class Settings(
     val dockPageSize: Int = 6,
     /** Touchpad speed multiplier, 0.4..3. */
     val touchpadSpeed: Float = 1.2f,
+    /** Screen stream (Phase 2): [com.niranjan.helm.core.StreamPreset] name. */
+    val streamPreset: String = "P1080_30",
+    /** 0 = the preset's default bitrate. */
+    val streamBitrateKbps: Int = 0,
+    val streamAudio: Boolean = true,
+    /** true = direct touch (tap where you see), false = trackpad. */
+    val streamDirectTouch: Boolean = false,
+    val streamShowStats: Boolean = false,
 )
 
 /** Phone-local preferences (not synced to the PC). */
@@ -29,6 +37,11 @@ class AppSettings(context: Context) {
         haptics = prefs.getBoolean("haptics", true),
         dockPageSize = prefs.getInt("dock_page", 6).let { if (it in listOf(4, 6, 8)) it else 6 },
         touchpadSpeed = prefs.getFloat("tp_speed", 1.2f).coerceIn(0.4f, 3f),
+        streamPreset = prefs.getString("st_preset", null) ?: "P1080_30",
+        streamBitrateKbps = prefs.getInt("st_kbps", 0).coerceAtLeast(0),
+        streamAudio = prefs.getBoolean("st_audio", true),
+        streamDirectTouch = prefs.getBoolean("st_direct", false),
+        streamShowStats = prefs.getBoolean("st_stats", false),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -39,6 +52,11 @@ class AppSettings(context: Context) {
             .putBoolean("haptics", s.haptics)
             .putInt("dock_page", s.dockPageSize)
             .putFloat("tp_speed", s.touchpadSpeed)
+            .putString("st_preset", s.streamPreset)
+            .putInt("st_kbps", s.streamBitrateKbps)
+            .putBoolean("st_audio", s.streamAudio)
+            .putBoolean("st_direct", s.streamDirectTouch)
+            .putBoolean("st_stats", s.streamShowStats)
             .apply()
         _settings.value = s
     }

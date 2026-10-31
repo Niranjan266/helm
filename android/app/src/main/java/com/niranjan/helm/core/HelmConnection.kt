@@ -47,9 +47,15 @@ import okio.ByteString.Companion.toByteString
 
 /** One way to reach the PC. */
 data class Endpoint(val host: String, val port: Int) {
-    fun url(scheme: String): String {
+    /** [path] is `/ws` for the control socket, `/stream` for the Phase 2 stream socket (§10). */
+    fun url(scheme: String, path: String = CONTROL_PATH): String {
         val h = if (':' in host && !host.startsWith("[")) "[$host]" else host
-        return "$scheme://$h:$port/ws"
+        return "$scheme://$h:$port$path"
+    }
+
+    companion object {
+        const val CONTROL_PATH = "/ws"
+        const val STREAM_PATH = "/stream"
     }
 
     override fun toString(): String = "$host:$port"
@@ -84,6 +90,8 @@ data class ReadyInfo(
     val agentVersion: String?,
     /** `hello.features` (e.g. `p1` for the Phase 1 methods). Empty for Phase 0 agents. */
     val features: Set<String> = emptySet(),
+    /** True when this session runs inside a relay tunnel (§12). */
+    val viaRelay: Boolean = false,
 )
 
 /** An `event` message from the agent (PROTOCOL.md §6, §9.4). */
@@ -111,6 +119,8 @@ object LocalCodes {
     const val NOT_READY = "not_ready"
     const val CLOSED = "closed"
     const val TRANSFER_FAILED = "transfer_failed"
+    const val BAD_STREAM = "bad_stream"
+    const val UNSUPPORTED = "unsupported"
 }
 
 /**
@@ -131,10 +141,30 @@ class HelmConnection(
     /** From sending `pair`/`auth` until `ready`/`error`. */
     private val readyTimeoutMs: Long = 20_000,
     private val defaultRequestTimeoutMs: Long = 10_000,
+    /** WebSocket path: [Endpoint.CONTROL_PATH] or [Endpoint.STREAM_PATH]. */
+    private val path: String = Endpoint.CONTROL_PATH,
+    /**
+     * When set, every binary frame after `ready` goes here (on the reader coroutine) instead of
+     * the file-transfer router. Used by the stream socket (§10).
+     */
+    private val binarySink: ((ByteArray) -> Unit)? = null,
+    /**
+     * Phase 4 fallback (§12): tried after every LAN endpoint failed to reach the agent. Only for
+     * [HandshakeMode.Auth]; pairing never goes over the relay.
+     */
+    private val relay: HelmTransport? = null,
 ) {
     init {
-        require(endpoints.isNotEmpty()) { "at least one endpoint is required" }
+        require(endpoints.isNotEmpty() || relay != null) { "at least one endpoint is required" }
+        require(mode is HandshakeMode.Auth || path == Endpoint.CONTROL_PATH) { "pairing is only allowed on the control socket" }
+        require(mode is HandshakeMode.Auth || (relay == null && !transport.relayed)) { "pairing is never allowed over the relay" }
+        require(relay == null || relay.relayed) { "relay transport must be relayed" }
     }
+
+    private class Route(val endpoint: Endpoint, val transport: HelmTransport)
+
+    private val routes: List<Route> = endpoints.map { Route(it, transport) } +
+        listOfNotNull(relay?.let { Route(Endpoint(TunnelProtocol.innerHost(hostId), TunnelProtocol.INNER_PORT), it) })
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
@@ -187,22 +217,24 @@ class HelmConnection(
     /** Opens the connection and completes the handshake. Throws [HelmException] on failure. */
     suspend fun connect(): ReadyInfo {
         check(started.compareAndSet(false, true)) { "connect() may only be called once" }
-        val client = try {
-            transport.client(fingerprint)
-        } catch (e: Exception) {
-            throw fail(HelmException(LocalCodes.UNREACHABLE, "Could not set up TLS: ${e.message}", e))
-        }
+        val clients = HashMap<HelmTransport, okhttp3.OkHttpClient>()
         var lastError: HelmException? = null
-        for (endpoint in endpoints) {
+        for (route in routes) {
+            val endpoint = route.endpoint
             if (closedByUser.get()) throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+            val client = clients[route.transport] ?: try {
+                route.transport.client(fingerprint).also { clients[route.transport] = it }
+            } catch (e: Exception) {
+                throw fail(HelmException(LocalCodes.UNREACHABLE, "Could not set up TLS: ${e.message}", e))
+            }
             _state.value = ConnectionState.Connecting(endpoint)
             val events = Channel<WsEvent>(Channel.UNLIMITED)
-            val request = Request.Builder().url(endpoint.url(transport.scheme)).build()
+            val request = Request.Builder().url(endpoint.url(route.transport.scheme, path)).build()
             val ws = client.newWebSocket(request, ChannelListener(events))
             socket = ws
             when (val attempt = handshake(ws, events, endpoint)) {
                 is Attempt.Success -> {
-                    readyInfo = attempt.info
+                    readyInfo = attempt.info.copy(viaRelay = route.transport.relayed)
                     hostFeatures = attempt.info.features
                     if (closedByUser.get()) {
                         ws.close(1000, null)
@@ -210,14 +242,13 @@ class HelmConnection(
                     }
                     _state.value = ConnectionState.Ready(attempt.info.tier, endpoint)
                     scope.launch { readLoop(events) }
-                    return attempt.info
+                    return readyInfo!!
                 }
                 is Attempt.TryNext -> {
                     ws.cancel()
                     socket = null
                     // A pin mismatch is more informative than a later timeout; keep it.
-                    if (lastError?.code != LocalCodes.PIN_MISMATCH) lastError = attempt.error
-                }
+                    if (lastError?.code != LocalCodes.PIN_MISMATCH) lastError = attempt.error                }
                 is Attempt.Stop -> {
                     ws.cancel()
                     socket = null
@@ -430,6 +461,10 @@ class HelmConnection(
     }
 
     private fun handleBinary(bytes: ByteArray) {
+        binarySink?.let { sink ->
+            runCatching { sink(bytes) }
+            return
+        }
         val frame = BinaryFrame.decode(bytes) ?: return
         downloads[frame.transferIdHex]?.trySend(frame)
     }
@@ -464,6 +499,15 @@ class HelmConnection(
     /** True when the agent advertises Phase 1 (`p1`). */
     val supportsPhase1: Boolean get() = "p1" in hostFeatures
 
+    /** True when the agent advertises the Phase 2 screen/audio stream (`p2`, §10). */
+    val supportsPhase2: Boolean get() = "p2" in hostFeatures
+
+    /** Phase 3 power-user methods (`p3`, §11). */
+    val supportsPhase3: Boolean get() = Features.P3 in hostFeatures
+
+    /** Phase 4 anywhere access (`p4`, §12): relay config, `wol.send`, `gy` input. */
+    val supportsPhase4: Boolean get() = Features.P4 in hostFeatures
+
     /**
      * Sends a fire-and-forget input frame (`{"type":"in","k":…}`, §9.1): no id, no reply.
      * Returns false when not connected or the socket is closing.
@@ -472,6 +516,13 @@ class HelmConnection(
         val ws = socket ?: return false
         if (_state.value !is ConnectionState.Ready) return false
         return ws.send(frame.toJson().toString())
+    }
+
+    /** Sends one raw JSON text frame (e.g. `stream.open`, §10). Returns false when not connected. */
+    fun sendText(obj: JsonObject): Boolean {
+        val ws = socket ?: return false
+        if (_state.value !is ConnectionState.Ready) return false
+        return ws.send(obj.toString())
     }
 
     /** Sends one binary frame (§9.2). Returns false when not connected. */
