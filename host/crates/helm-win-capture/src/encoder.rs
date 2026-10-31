@@ -510,6 +510,19 @@ impl H264Encoder {
         }
     }
 
+    /// Change the CBR target while streaming (`CODECAPI_AVEncCommonMeanBitRate` is a dynamic
+    /// property for H.264 encoders). Returns false when the encoder rejects the change.
+    pub fn set_bitrate(&self, kbps: u32) -> bool {
+        match &self.codec_api {
+            // SAFETY: valid pointers for the call.
+            Some(c) => unsafe {
+                c.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &variant_u32(kbps.saturating_mul(1000)))
+            }
+            .is_ok(),
+            None => false,
+        }
+    }
+
     /// Wrap an NV12 texture in an `IMFSample`. With GPU input the sample references the
     /// texture (it must not be overwritten until the matching output arrives); otherwise the
     /// pixels are copied to system memory and the texture is free again on return.

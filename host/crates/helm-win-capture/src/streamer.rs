@@ -75,6 +75,7 @@ enum Msg {
     Frame { slot: usize, capture_time: i64 },
     Mft { event: u32, status: HRESULT },
     Keyframe,
+    Bitrate(u32),
     SourceClosed,
     Stop,
 }
@@ -198,6 +199,14 @@ impl Streamer {
     /// reports packet loss.
     pub fn request_keyframe(&self) {
         let _ = self.tx.send(Msg::Keyframe);
+    }
+
+    /// Change the CBR bitrate of the running encoder (adaptive bitrate). Clamped to the
+    /// `StreamConfig` limits; applied on the pipeline thread before the next frame. Encoders
+    /// that reject the dynamic change keep their old rate (see `stats().bitrate_kbps`).
+    pub fn set_bitrate(&self, kbps: u32) {
+        let kbps = kbps.clamp(crate::config::MIN_BITRATE_KBPS, crate::config::MAX_BITRATE_KBPS);
+        let _ = self.tx.send(Msg::Bitrate(kbps));
     }
 
     /// Current statistics.
@@ -600,6 +609,11 @@ fn run_loop(p: &mut Pipeline, rx: &Receiver<Msg>, event_cb: Option<&IMFAsyncCall
             Msg::SourceClosed => return Some("capture source closed".into()),
             Msg::Keyframe => {
                 p.force_key = true;
+                Ok(())
+            }
+            Msg::Bitrate(kbps) => {
+                // A rejected change keeps the previous rate; nothing else to do.
+                let _ = p.encoder.set_bitrate(kbps);
                 Ok(())
             }
             Msg::Frame { mut slot, mut capture_time } => {

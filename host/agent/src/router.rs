@@ -55,6 +55,10 @@ impl RpcError {
     pub fn internal(message: impl Into<String>) -> RpcError {
         Self::new("internal", message)
     }
+    /// The feature exists in the protocol but this PC / build cannot do it.
+    pub fn unsupported(message: impl Into<String>) -> RpcError {
+        Self::new("unsupported", message)
+    }
 }
 
 /// Who is calling, available to every method.

@@ -245,6 +245,17 @@ Deck `action` = one of `{"hotkey":"ctrl+shift+esc"}`, `{"text":"…"}`, `{"launc
   absolute moves: `{"type":"in","k":"ma","x":0..1,"y":0..1}` normalised to the streamed monitor.
 - `record.start{audio}` → `{path}`, `record.stop` → `{path,duration_ms}` (MP4 in Videos\Helm).
 
+### 10.1 Clarifications (settled after Phase 2 build)
+- `0x05` header fields are big-endian; cursor PNG is in native monitor pixels.
+- `stream.start` params are optional (defaults 1920×1080, 60 fps, 8000 kbps; no source = primary
+  monitor); result adds `audio:bool` and `opus_pre_skip` (samples, null without audio).
+- `stream.stats` is a normal request → `{bitrate_kbps}` (or `{}`); `dropped` = since last report.
+- `stream.config` → `{bitrate_kbps,fps,width,height}`; fps change restarts the encoder.
+- Event `stream.ended{reason}`. One stream per control session; a new start replaces it.
+- Video/audio/cursor pts share one clock starting at `stream.start`; off-monitor cursor → `visible:false`.
+- New error code `unsupported` (e.g. `record.*` until MP4 recording lands).
+- Stream keyframes may exceed 1 MiB: `/stream` binary frames are allowed up to 16 MiB.
+
 ## 11. Phase 3 — power user (feature `p3`)
 
 | method | tier | params → result |

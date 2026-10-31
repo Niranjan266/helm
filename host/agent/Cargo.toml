@@ -44,9 +44,11 @@ helm-win-system = { path = "../crates/helm-win-system" }
 
 [target.'cfg(windows)'.dependencies]
 helm-win-capture = { path = "../crates/helm-win-capture" }
+helm-win-audio = { path = "../crates/helm-win-audio" }
 tray-icon = { version = "0.25.1", default-features = false }
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
     "Win32_System_Console",
@@ -59,3 +61,10 @@ windows = { version = "0.62.2", features = [
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# helm-win-audio's Opus codec (c2rust-translated libopus) is ~10x slower unoptimised and relies
+# on wrapping arithmetic; profiles only apply at the build root (see that crate's README).
+[profile.dev.package.unsafe-libopus]
+opt-level = 3
+overflow-checks = false
+debug-assertions = false

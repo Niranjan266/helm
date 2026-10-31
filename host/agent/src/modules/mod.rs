@@ -14,6 +14,7 @@ pub mod layout;
 pub mod media;
 pub mod power;
 pub mod screen;
+pub mod stream;
 pub mod system;
 
 /// All modules shipped in this build.
@@ -28,6 +29,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(clipboard::ClipboardModule),
         Arc::new(files::FilesModule),
         Arc::new(screen::ScreenModule),
+        Arc::new(stream::StreamModule),
     ]
 }
 

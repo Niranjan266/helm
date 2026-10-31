@@ -316,6 +316,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Physical pixels everywhere (capture, cursor, absolute input); see helm-win-capture README.
+    helm_agent::screen::make_process_dpi_aware();
     let Some(args) = parse_args()? else {
         return Ok(());
     };

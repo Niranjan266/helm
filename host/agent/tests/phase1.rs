@@ -186,7 +186,7 @@ async fn hello_advertises_p1_and_every_method_exists() {
     let (server, _fake) = start_fake_with(dir.path(), |_| {}).await;
     let mut ws = connect(&server).await;
     let hello = recv(&mut ws).await;
-    assert_eq!(hello["features"], json!(["p1"]));
+    assert_eq!(hello["features"], json!(["p1", "p2"]));
     let names = server.state().router().method_names();
     for m in [
         "apps.list",

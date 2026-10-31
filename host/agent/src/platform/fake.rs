@@ -1,7 +1,8 @@
 //! A fake PC for tests: canned data in, every call recorded, nothing touches the real system.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use helm_win_input::{Op, Sink};
 use helm_win_system::display::DisplayKind;
@@ -23,6 +24,11 @@ pub struct FakeState {
     pub adapters: Vec<Adapter>,
     pub battery: Option<Battery>,
     pub monitors: Vec<Monitor>,
+    /// Size of each synthetic H.264 access unit the fake streamer emits.
+    pub au_size: usize,
+    /// `start_audio` works (true) or reports `unsupported`.
+    pub audio_supported: bool,
+    pub cursor: CursorState,
 }
 
 /// One tiny valid PNG (1x1, opaque black).
@@ -124,6 +130,113 @@ impl Default for FakeState {
                 height: 1080,
                 is_primary: true,
             }],
+            au_size: 200,
+            audio_supported: true,
+            cursor: CursorState {
+                x: 960,
+                y: 540,
+                visible: true,
+                handle: 0x1001,
+            },
+        }
+    }
+}
+
+/// What the fake streamer was asked to do (shared with the emitting thread).
+#[derive(Debug, Default)]
+pub struct FakeVideoCtl {
+    pub params: Mutex<Option<VideoParams>>,
+    pub keyframe_requests: AtomicU64,
+    pub bitrates: Mutex<Vec<u32>>,
+    pub frames: AtomicU64,
+    /// Set to make the stream end by itself with this reason.
+    pub end_with: Mutex<Option<String>>,
+    stop: AtomicBool,
+    force_key: AtomicBool,
+}
+
+impl FakeVideoCtl {
+    /// True once the agent dropped (stopped) this stream.
+    pub fn is_stopped(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+}
+
+/// Synthetic Annex-B access unit: IDR with SPS/PPS, or a P slice. `seq` follows the slice
+/// header byte so tests can follow frames.
+pub fn synthetic_au(key: bool, seq: u32, size: usize) -> Vec<u8> {
+    let mut au = Vec::with_capacity(size.max(32));
+    if key {
+        au.extend_from_slice(&[0, 0, 0, 1, 0x67, 0x4D, 0x40, 0x2A]); // SPS (Main)
+        au.extend_from_slice(&[0, 0, 0, 1, 0x68, 0xEE, 0x3C, 0x80]); // PPS
+        au.extend_from_slice(&[0, 0, 0, 1, 0x65]); // IDR slice
+    } else {
+        au.extend_from_slice(&[0, 0, 0, 1, 0x41]); // non-IDR slice
+    }
+    au.extend_from_slice(&seq.to_be_bytes());
+    while au.len() < size {
+        au.push(0xAA);
+    }
+    au
+}
+
+struct FakeVideo {
+    ctl: Arc<FakeVideoCtl>,
+    info: VideoInfo,
+    rect: Rect,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl VideoStream for FakeVideo {
+    fn info(&self) -> VideoInfo {
+        self.info.clone()
+    }
+    fn request_keyframe(&self) {
+        self.ctl.keyframe_requests.fetch_add(1, Ordering::SeqCst);
+        self.ctl.force_key.store(true, Ordering::SeqCst);
+    }
+    fn set_bitrate(&self, kbps: u32) {
+        self.ctl.bitrates.lock().unwrap().push(kbps);
+    }
+    fn is_running(&self) -> bool {
+        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+    fn ended_reason(&self) -> Option<String> {
+        self.ctl.end_with.lock().unwrap().clone()
+    }
+    fn source_rect(&self) -> Option<Rect> {
+        Some(self.rect)
+    }
+}
+
+impl Drop for FakeVideo {
+    fn drop(&mut self) {
+        self.ctl.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+struct FakeAudio {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AudioStream for FakeAudio {
+    fn is_running(&self) -> bool {
+        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+    }
+    fn pre_skip(&self) -> u32 {
+        120
+    }
+}
+
+impl Drop for FakeAudio {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
         }
     }
 }
@@ -135,6 +248,8 @@ pub struct FakePlatform {
     ops: Arc<Mutex<Vec<Op>>>,
     block_input: Arc<AtomicBool>,
     events: Mutex<Option<EventSink>>,
+    video: Mutex<Option<Arc<FakeVideoCtl>>>,
+    audio_running: Arc<AtomicU64>,
 }
 
 #[derive(Debug)]
@@ -184,6 +299,16 @@ impl FakePlatform {
             Some(tx) => tx.send(event).is_ok(),
             None => false,
         }
+    }
+
+    /// The most recently started fake video stream.
+    pub fn video(&self) -> Option<Arc<FakeVideoCtl>> {
+        self.video.lock().unwrap().clone()
+    }
+
+    /// Fake audio streams currently running.
+    pub fn audio_streams(&self) -> u64 {
+        self.audio_running.load(Ordering::SeqCst)
     }
 
     pub fn watchers_running(&self) -> bool {
@@ -346,5 +471,121 @@ impl Platform for FakePlatform {
     fn start_watchers(&self, events: EventSink) -> WatchGuard {
         *self.events.lock().unwrap() = Some(events);
         Box::new(())
+    }
+
+    fn start_video(
+        &self,
+        params: VideoParams,
+        mut sink: AccessUnitSink,
+    ) -> PResult<Box<dyn VideoStream>> {
+        let st = self.state().clone();
+        let monitor = match &params.source {
+            VideoSource::Monitor(None) => st.monitors.iter().find(|m| m.is_primary),
+            VideoSource::Monitor(Some(id)) => st.monitors.iter().find(|m| &m.id == id),
+            VideoSource::Window(hwnd) => {
+                if !st.windows.iter().any(|w| w.hwnd == *hwnd) {
+                    return Err(RpcError::bad_params(format!("not found: window {hwnd}")));
+                }
+                st.monitors.iter().find(|m| m.is_primary)
+            }
+        };
+        let Some(monitor) = monitor else {
+            return Err(RpcError::bad_params("not found: monitor"));
+        };
+        let rect = Rect::from(monitor);
+        // Same rule as the real encoder: fit inside max, keep aspect, even sizes.
+        let scale = f64::min(
+            1.0,
+            f64::min(
+                params.max_width as f64 / rect.width as f64,
+                params.max_height as f64 / rect.height as f64,
+            ),
+        );
+        let even = |v: f64| ((v as u32) & !1).max(2);
+        let info = VideoInfo {
+            width: even(rect.width as f64 * scale),
+            height: even(rect.height as f64 * scale),
+            fps: params.fps,
+            hardware: true,
+            encoder_name: "Fake H.264 Encoder".into(),
+        };
+        self.record(format!(
+            "start_video:{:?}:{}x{}@{}:{}",
+            params.source, params.max_width, params.max_height, params.fps, params.bitrate_kbps
+        ));
+        let ctl = Arc::new(FakeVideoCtl::default());
+        *ctl.params.lock().unwrap() = Some(params.clone());
+        *self.video.lock().unwrap() = Some(ctl.clone());
+        let tctl = ctl.clone();
+        let size = st.au_size;
+        let fps = params.fps.max(1);
+        let thread = std::thread::Builder::new()
+            .name("fake-video".into())
+            .spawn(move || {
+                let interval = Duration::from_micros(1_000_000 / fps as u64);
+                let gop = (fps * 2) as u64;
+                let mut n: u64 = 0;
+                while !tctl.stop.load(Ordering::SeqCst) && tctl.end_with.lock().unwrap().is_none()
+                {
+                    let forced = tctl.force_key.swap(false, Ordering::SeqCst);
+                    let key = n.is_multiple_of(gop) || forced;
+                    let au = synthetic_au(key, n as u32, size);
+                    sink(&au, key, n * 1_000_000 / fps as u64);
+                    tctl.frames.fetch_add(1, Ordering::SeqCst);
+                    n += 1;
+                    std::thread::sleep(interval);
+                }
+            })
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        Ok(Box::new(FakeVideo {
+            ctl,
+            info,
+            rect,
+            thread: Some(thread),
+        }))
+    }
+
+    fn start_audio(&self, mut sink: AudioSink) -> PResult<Box<dyn AudioStream>> {
+        if !self.state().audio_supported {
+            return Err(RpcError::unsupported("fake: no audio"));
+        }
+        self.record("start_audio".into());
+        let stop = Arc::new(AtomicBool::new(false));
+        let tstop = stop.clone();
+        let running = self.audio_running.clone();
+        running.fetch_add(1, Ordering::SeqCst);
+        let thread = std::thread::Builder::new()
+            .name("fake-audio".into())
+            .spawn(move || {
+                let mut pts: u64 = 0;
+                while !tstop.load(Ordering::SeqCst) {
+                    sink(&[0xFC, 0xFF, 0xFE], pts);
+                    pts += 20_000;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                running.fetch_sub(1, Ordering::SeqCst);
+            })
+            .map_err(|e| RpcError::internal(e.to_string()))?;
+        Ok(Box::new(FakeAudio {
+            stop,
+            thread: Some(thread),
+        }))
+    }
+
+    fn cursor(&self) -> PResult<CursorState> {
+        Ok(self.state().cursor)
+    }
+
+    fn cursor_shape(&self, handle: u64) -> PResult<Option<CursorShape>> {
+        if handle == 0 {
+            return Ok(None);
+        }
+        Ok(Some(CursorShape {
+            width: 1,
+            height: 1,
+            hot_x: 0,
+            hot_y: 0,
+            png: TINY_PNG.to_vec(),
+        }))
     }
 }

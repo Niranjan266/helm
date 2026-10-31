@@ -51,6 +51,7 @@ so every frame changes and latency is measured on real new frames. It never touc
 | `screenshot_rgba`, `screenshot_rect_rgba`, `screenshot_primary_rgba`, `encode_png` | lower-level still capture |
 | `Streamer::start(StreamConfig, FnMut(&[u8], bool, u64))` | start a stream; returns once the encoder runs or with the error |
 | `Streamer::request_keyframe()` | next frame becomes an IDR (`CODECAPI_AVEncVideoForceKeyFrame`) |
+| `Streamer::set_bitrate(kbps)` | change the CBR target while running (`CODECAPI_AVEncCommonMeanBitRate`, applied before the next frame; encoders that reject it keep the old rate) |
 | `Streamer::stats() / stop()` | `StreamStats` (fps, latency median/p95/max, drops, bitrate) |
 | `Streamer::info()` | `StreamInfo`: encoder name, hardware?, GPU input?, async MFT?, profile, sizes |
 | `Streamer::is_running()` | false after the source closed or an error (`stats().ended_reason`) |
@@ -177,8 +178,7 @@ helm-win-capture = { path = "../crates/helm-win-capture" }
   just drop the `Streamer`.
 * **Monitor unplugged / window closed:** the pipeline stops by itself; `is_running()` becomes
   false and `stats().ended_reason` says why. Send the phone an event and offer the monitor list.
-* **Adaptive bitrate (later):** today the bitrate is fixed per stream. Restart the stream with a
-  new bitrate, or extend the encoder with `CODECAPI_AVEncCommonMeanBitRate` at runtime.
+* **Adaptive bitrate:** `set_bitrate(kbps)` at runtime (the agent drives it from `stream.stats`).
 
 ## Measured (this dev PC)
 
@@ -230,7 +230,8 @@ and `png`.
 * **Secure desktop** (UAC prompts, lock screen, Ctrl+Alt+Del) is not capturable by a normal user
   process with either GDI or WGC. A SYSTEM-service helper would be needed.
 * **Cursor** is not in the picture (by design). The agent sends position/shape separately.
-* **Bitrate is fixed per stream**: no runtime ABR yet. **One stream per `Streamer`**.
+* Runtime `set_bitrate` was verified through the agent with the fake only; acceptance of the dynamic
+  change by AMD / Intel MFTs is untested. **One stream per `Streamer`**. fps changes need a restart.
   Two monitors means two `Streamer`s (each has its own device and encoder session; consumer
   NVIDIA GPUs allow a limited number of concurrent NVENC sessions).
 * The software MFT works at 1080p60 here but costs a lot of CPU. Lower `max_*` / `fps` when
