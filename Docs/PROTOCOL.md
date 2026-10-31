@@ -294,7 +294,23 @@ OBS uses obs-websocket v5 at `ws://127.0.0.1:4455` with password from `obs.json`
 - USB: no protocol change (USB tethering is just another LAN address).
 - `in` kind `gy{dx,dy}` = gyro air-mouse deltas (same handling as `mm`).
 
-## 13. Storage on the PC
+## 13. Phase 5 — extras (feature `p5`)
+
+| method | tier | params → result |
+|---|---|---|
+| `record.start` / `record.stop` | remote | `{audio}` → `{path}` / → `{path,duration_ms}` (MP4, Videos\Helm; uses the active stream's encoder or starts one) |
+| `term.open` | admin | `{shell:"powershell"|"cmd",cols,rows}` → `{term_id}`; output as events `term.output{term_id,data_b64}`, end `term.exit{term_id,code}` |
+| `term.write` / `term.resize` / `term.close` | admin | `{term_id,data_b64}` / `{term_id,cols,rows}` / `{term_id}` → `{}` |
+| `pen` input frames | remote | `{"type":"in","k":"pn","x":0..1,"y":0..1,"pressure":0..1,"tilt_x","tilt_y","state":"hover"|"down"|"up","eraser":bool}` |
+| `notify.push` | remote | `{app,title,body,icon_png_b64?,actions:[{id,label}],reply:bool,key}` → `{}`; Windows toast; clicks → event `notify.action{key,action_id,reply_text?}` |
+| `plugins.list` / `plugins.set` | viewer / admin | → `{plugins:[{id,name,version,capabilities,granted,enabled,error?}]}` / `{id,enabled,granted}` |
+| `triggers.get` / `triggers.set` | viewer / remote | `{triggers:[{id,when:{time:"HH:MM days"}|{app_start:exe}|{phone_connected:device_id?}|{wifi:ssid},action}]}` |
+| `ha.config.set` | admin | `{url,token}` (stored DPAPI-encrypted) → `{}`; `ha.states` (viewer) → `{states:[…]}`; deck action `{"ha":{"service":"light.toggle","entity_id":"…"}}` |
+
+Every `term.*` call and `ha.config.set` is written to `audit.log`. Android sends its own
+notifications through `notify.push` only when the user enables "Mirror notifications" for an app.
+
+## 14. Storage on the PC
 
 `%APPDATA%\Helm\` (overridable for tests):
 - `identity.json` — `host_id`, cert DER (base64), private key PKCS#8 **encrypted with Windows
