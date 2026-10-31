@@ -99,6 +99,23 @@ interface HelmTransport {
     fun client(fingerprintHex: String): OkHttpClient
 }
 
+/**
+ * Plain sockets with Nagle's algorithm off: touchpad frames are tiny and must leave at once,
+ * not wait to be bundled with the next one (which made the cursor stutter).
+ */
+object NoDelaySocketFactory : javax.net.SocketFactory() {
+    private val base = javax.net.SocketFactory.getDefault()
+    private fun tune(s: java.net.Socket) = s.apply { tcpNoDelay = true }
+
+    override fun createSocket(): java.net.Socket = tune(base.createSocket())
+    override fun createSocket(host: String?, port: Int): java.net.Socket = tune(base.createSocket(host, port))
+    override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int): java.net.Socket =
+        tune(base.createSocket(host, port, localHost, localPort))
+    override fun createSocket(host: java.net.InetAddress?, port: Int): java.net.Socket = tune(base.createSocket(host, port))
+    override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int): java.net.Socket =
+        tune(base.createSocket(address, port, localAddress, localPort))
+}
+
 /** Production transport: TLS pinned to the PC's certificate fingerprint. */
 class PinnedTlsTransport(
     private val base: OkHttpClient = OkHttpClient(),
@@ -112,6 +129,7 @@ class PinnedTlsTransport(
         val ctx = SSLContext.getInstance("TLS")
         ctx.init(null, arrayOf(tm), null)
         return base.newBuilder()
+            .socketFactory(NoDelaySocketFactory)
             .sslSocketFactory(ctx.socketFactory, tm)
             .hostnameVerifier(PinnedHostnameVerifier)
             .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
