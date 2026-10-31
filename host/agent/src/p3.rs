@@ -374,6 +374,7 @@ async fn foreground_pump(state: Arc<AppState>) {
         };
     while let Some(info) = rx.recv().await {
         *lock(&state.p3.last_foreground) = Some(info.exe_name.clone());
+        crate::p5::on_foreground(&state, &info.exe_name);
         let st = state.clone();
         let _ = tokio::task::spawn_blocking(move || announce_rematch(&st)).await;
     }

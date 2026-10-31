@@ -102,6 +102,9 @@ and `pair-qr.svg` is written into the data folder (deleted again when the agent 
 - `agent.log` (+ `agent.log.1`) — log file in `--background` mode, rotated at 1 MiB.
 - `alerts.json`, `profiles.json` — Phase 3 alert rules and profiles; `obs.json` (optional,
   written by you) — OBS websocket password/port.
+- Phase 5: `triggers.json`, `plugins.json` (enabled + granted per plugin), `plugins\` (plugin
+  folders you install), `ha.json` (Home Assistant URL + DPAPI-encrypted token),
+  `notify-icons\` (toast icons). Recordings go to `<Videos>\Helm`.
 
 Files sent from the phone go to `<Downloads>\Helm` (name made safe, never overwritten:
 `a (1).txt`). `file.download` (admin) only serves regular files under the user's profile
@@ -173,6 +176,49 @@ never deletes a root, and deletes only files and **empty** folders. `devices.set
 refuses the calling device's own tier and disconnects the changed device so it re-auths with
 the new tier. Kills, priorities, alert/tier changes and fs changes go to `audit.log`;
 `audit.list{limit≤1000}` returns the last lines.
+
+## Phase 5 — extras (`"p5"` feature)
+
+PROTOCOL.md §13. Every new PC effect goes through `Platform` (`platform/real5.rs` for this
+PC, `platform/fake.rs` for tests), so `tests/phase5.rs` never records, spawns a shell, injects
+a pen, shows a toast, reads Wi-Fi or makes an HTTP request on the real PC.
+
+- **Recording** (`p5/record.rs`, `record.start{audio}` / `record.stop`, remote): MP4 via
+  `helm-win-record` into `Videos\Helm\helm-YYYYMMDD-HHMMSS.mp4`. If the session is streaming,
+  the stream's encoder is tapped (same H.264, no second encode; a keyframe is requested);
+  otherwise a private 1920×1080@30, 8 Mbit/s encoder runs. Audio = the stream's system audio
+  or a private loopback capture; Opus packets are decoded back to PCM for the AAC track.
+  Video and audio share one clock (`StreamClock`). Disconnect finalizes the file.
+- **Terminal** (`p5/term.rs`, `term.*`, admin): ConPTY shells (`helm-win-terminal`,
+  `powershell`/`cmd`, cwd = profile), ≤ 8 per session, owned by the opening session, killed
+  on disconnect. Events `term.output{term_id,data_b64}`, `term.exit{term_id,code}`. Every
+  `term.*` call is audited; `term.write` logs only the byte count, never the keystrokes.
+- **Pen** (`in` kind `pn`, remote; `session.rs`): normalised like `ma` (streamed source or
+  primary monitor), tilt in degrees, `state` hover/down/up → `helm-win-pen`. The phone sends no
+  "leave": the agent injects it after 300 ms without `pn` frames and on disconnect.
+- **Toasts** (`notify.push`, remote; `modules/extras.rs`): `helm-win-notify` toast (AUMID
+  `Helm.Agent`), tag = `key` (≤ 64 chars), optional PNG icon cached in
+  `notify-icons\`, buttons + inline reply (button id `reply`). Clicks go to the pushing
+  device's sessions as `notify.action{key,action_id,reply_text?}` (`action_id: null` = body).
+- **Plugins** (`p5/plugins.rs`, `plugins.list` viewer / `plugins.set{id,enabled,granted}` admin
+  → full list): folders in `<data_dir>\plugins\<folder>\` with `plugin.json` + `module.wasm`,
+  run by the `helm-plugins` wasmtime sandbox; grants = requested ∩ granted, saved in
+  `plugins.json`. Entries add `running` and `error`. Host services: deck actions (validated,
+  run like `deck.run`), `emit_event` → broadcast `plugin.event{plugin_id,name,data}`, logs.
+  Trigger events (JSON, e.g. `{"type":"wifi_connected","ssid":"…"}`) go to `handle`.
+- **Triggers** (`p5/triggers.rs`, `triggers.get` viewer / `triggers.set` remote, `triggers.json`):
+  `helm-plugins` trigger engine; `when` takes the §13 short forms (`{"app_start":"x.exe"}`,
+  `{"wifi":"ssid"}`, `{"phone_connected":id|null}`) or the crate's object forms; actions are
+  deck actions (incl. `ha`). Inputs: the foreground watcher (app comes to the front =
+  `app_start`), first/last control session of a device, a Wi-Fi SSID poll every 5 s
+  (`WlanQueryInterface`; Windows 11 24H2 needs location permission, otherwise no SSID), and a
+  30 s clock tick with the Windows time-zone offset (`GetTimeZoneInformation`).
+- **Home Assistant** (`p5/ha.rs`): `ha.config.set{url,token}` (admin, audited without the token)
+  stores the token DPAPI-encrypted in `ha.json`; `ha.states` (viewer); deck/trigger action
+  `{"ha":{"service":"light.toggle","entity_id":"light.desk","data":{…}?}}`.
+- **HTTPS** (`http.rs`): `TlsHttpTransport` implements `helm-plugins`' `HttpTransport` with the
+  agent's rustls (ring, webpki roots), one request per connection, no redirects, bounded
+  bodies; `http://` goes to the crate's std client.
 
 ## Firewall
 

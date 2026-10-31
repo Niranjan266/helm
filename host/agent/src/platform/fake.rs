@@ -36,6 +36,11 @@ pub struct FakeState {
     pub mic_muted: Option<bool>,
     pub fixed_drives: Vec<std::path::PathBuf>,
     pub clock: String,
+    // Phase 5
+    pub wifi_ssid: Option<String>,
+    pub utc_offset_minutes: i32,
+    /// `new_pen` works (true) or reports `unsupported`.
+    pub pen_supported: bool,
 }
 
 pub fn sample_process(pid: u32, name: &str) -> ProcessInfo {
@@ -189,6 +194,9 @@ impl Default for FakeState {
             mic_muted: Some(false),
             fixed_drives: Vec::new(),
             clock: "12:34".into(),
+            wifi_ssid: None,
+            utc_offset_minutes: 0,
+            pen_supported: true,
             au_size: 200,
             audio_supported: true,
             cursor: CursorState {
@@ -319,6 +327,21 @@ pub struct FakePlatform {
     events: Mutex<Option<EventSink>>,
     video: Mutex<Option<Arc<FakeVideoCtl>>>,
     audio_running: Arc<AtomicU64>,
+    // Phase 5
+    recordings: Mutex<Vec<Arc<FakeRecording>>>,
+    terminals: Mutex<Vec<Arc<FakeTerm>>>,
+    pen: Arc<Mutex<Vec<PenSample>>>,
+    pen_releases: Arc<AtomicU64>,
+    toasts: Mutex<Vec<FakeToast>>,
+    http: Arc<FakeHttp>,
+}
+
+struct FakeToast(Toast, Arc<ToastCallback>);
+
+impl std::fmt::Debug for FakeToast {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 #[derive(Debug)]
@@ -398,6 +421,52 @@ impl FakePlatform {
     pub fn watchers_running(&self) -> bool {
         self.events.lock().unwrap().is_some()
     }
+
+    // ---- Phase 5 ----
+
+    /// Every recording started so far.
+    pub fn recordings(&self) -> Vec<Arc<FakeRecording>> {
+        self.recordings.lock().unwrap().clone()
+    }
+
+    /// Every terminal opened so far.
+    pub fn terminals(&self) -> Vec<Arc<FakeTerm>> {
+        self.terminals.lock().unwrap().clone()
+    }
+
+    /// Pen samples "injected" so far.
+    pub fn pen_samples(&self) -> Vec<PenSample> {
+        self.pen.lock().unwrap().clone()
+    }
+
+    /// How many pen devices were released (dropped).
+    pub fn pen_releases(&self) -> u64 {
+        self.pen_releases.load(Ordering::SeqCst)
+    }
+
+    /// Toasts "shown" so far.
+    pub fn toasts(&self) -> Vec<Toast> {
+        self.toasts.lock().unwrap().iter().map(|t| t.0.clone()).collect()
+    }
+
+    /// Pretend the user clicked toast `index` (button `action_id`, or the body for `None`).
+    pub fn click_toast(&self, index: usize, action_id: Option<&str>, reply: Option<&str>) -> bool {
+        let cb = match self.toasts.lock().unwrap().get(index) {
+            Some(t) => t.1.clone(),
+            None => return false,
+        };
+        cb(ToastEvent::Activated {
+            action_id: action_id.map(Into::into),
+            reply: reply.map(Into::into),
+        });
+        true
+    }
+
+    /// The scripted HTTP transport (responses and the requests it saw).
+    pub fn http_fake(&self) -> Arc<FakeHttp> {
+        self.http.clone()
+    }
+
 
     fn record(&self, call: String) {
         self.calls.lock().unwrap().push(call);
@@ -763,4 +832,265 @@ impl Platform for FakePlatform {
         *self.foreground.lock().unwrap() = Some(sink);
         Box::new(())
     }
+
+    fn start_recorder(
+        &self,
+        path: &std::path::Path,
+        config: RecordConfig,
+    ) -> PResult<Arc<dyn Recorder>> {
+        self.record(format!(
+            "start_recorder:{}x{}@{}:audio={}",
+            config.width, config.height, config.fps, config.audio
+        ));
+        let rec = Arc::new(FakeRecording {
+            path: path.to_path_buf(),
+            config,
+            video_frames: AtomicU64::new(0),
+            keyframes: AtomicU64::new(0),
+            audio_packets: AtomicU64::new(0),
+            stopped: AtomicBool::new(false),
+            pts: Mutex::new((None, 0)),
+        });
+        self.recordings.lock().unwrap().push(rec.clone());
+        Ok(rec)
+    }
+
+    fn open_terminal(
+        &self,
+        shell: Shell,
+        cols: u16,
+        rows: u16,
+        on_output: TermOutput,
+        on_exit: TermExit,
+    ) -> PResult<Box<dyn TermSession>> {
+        helm_win_terminal::validate_size(cols, rows)
+            .map_err(|e| RpcError::bad_params(e.to_string()))?;
+        self.record(format!("open_terminal:{shell:?}:{cols}x{rows}"));
+        let term = Arc::new(FakeTerm {
+            shell,
+            size: Mutex::new((cols, rows)),
+            input: Mutex::new(Vec::new()),
+            output: Mutex::new(Some(on_output)),
+            exit: Mutex::new(Some(on_exit)),
+            killed: AtomicBool::new(false),
+        });
+        self.terminals.lock().unwrap().push(term.clone());
+        Ok(Box::new(FakeTermHandle(term)))
+    }
+
+    fn new_pen(&self) -> PResult<Box<dyn PenDevice>> {
+        if !self.state().pen_supported {
+            return Err(RpcError::unsupported("fake: no pen"));
+        }
+        self.record("new_pen".into());
+        Ok(Box::new(FakePen {
+            samples: self.pen.clone(),
+            releases: self.pen_releases.clone(),
+        }))
+    }
+
+    fn show_toast(&self, toast: &Toast, on_event: ToastCallback) -> PResult<()> {
+        helm_win_notify::model::validate_toast(toast).map_err(|e| RpcError::bad_params(e.to_string()))?;
+        self.record(format!("show_toast:{}", toast.title));
+        self.toasts
+            .lock()
+            .unwrap()
+            .push(FakeToast(toast.clone(), Arc::new(on_event)));
+        Ok(())
+    }
+
+    fn http(&self) -> Arc<dyn HttpTransport> {
+        self.http.clone()
+    }
+
+    fn wifi_ssid(&self) -> PResult<Option<String>> {
+        Ok(self.state().wifi_ssid.clone())
+    }
+
+    fn utc_offset_minutes(&self) -> i32 {
+        self.state().utc_offset_minutes
+    }
 }
+
+// ---------------------------------------------------------------- Phase 5 fakes
+
+/// A fake MP4 recording: counts what it was fed; `stop` writes a small placeholder file.
+#[derive(Debug)]
+pub struct FakeRecording {
+    pub path: std::path::PathBuf,
+    pub config: RecordConfig,
+    pub video_frames: AtomicU64,
+    pub keyframes: AtomicU64,
+    pub audio_packets: AtomicU64,
+    pub stopped: AtomicBool,
+    /// (first video pts, last video pts)
+    pts: Mutex<(Option<u64>, u64)>,
+}
+
+impl Recorder for FakeRecording {
+    fn push_video(&self, _annex_b: &[u8], is_key: bool, pts_us: u64) {
+        let mut pts = self.pts.lock().unwrap();
+        if pts.0.is_none() && !is_key {
+            return; // like the real one: the file starts at a keyframe
+        }
+        pts.0.get_or_insert(pts_us);
+        pts.1 = pts_us;
+        self.video_frames.fetch_add(1, Ordering::SeqCst);
+        if is_key {
+            self.keyframes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    fn push_audio_opus(&self, _packet: &[u8], _pts_us: u64) {
+        self.audio_packets.fetch_add(1, Ordering::SeqCst);
+    }
+    fn stop(&self) -> PResult<RecordedFile> {
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return Err(RpcError::internal("fake: already stopped"));
+        }
+        let (first, last) = *self.pts.lock().unwrap();
+        let Some(first) = first else {
+            return Err(RpcError::internal(
+                "no video frame was received; nothing was recorded",
+            ));
+        };
+        std::fs::write(&self.path, b"fake mp4").map_err(|e| RpcError::internal(e.to_string()))?;
+        Ok(RecordedFile {
+            path: self.path.to_string_lossy().into_owned(),
+            duration_ms: last.saturating_sub(first) / 1000,
+        })
+    }
+}
+
+/// A fake shell: echoes what is written; writing `exit` ends it with code 0, kill with 1.
+pub struct FakeTerm {
+    pub shell: Shell,
+    pub size: Mutex<(u16, u16)>,
+    pub input: Mutex<Vec<u8>>,
+    output: Mutex<Option<TermOutput>>,
+    exit: Mutex<Option<TermExit>>,
+    pub killed: AtomicBool,
+}
+
+impl std::fmt::Debug for FakeTerm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeTerm").field("shell", &self.shell).finish()
+    }
+}
+
+impl FakeTerm {
+    fn end(self: &Arc<Self>, code: u32) {
+        let this = self.clone();
+        std::thread::spawn(move || {
+            this.output.lock().unwrap().take();
+            let exit = this.exit.lock().unwrap().take();
+            if let Some(exit) = exit {
+                exit(code);
+            }
+        });
+    }
+
+    /// False once the fake shell ended.
+    pub fn is_running(&self) -> bool {
+        self.exit.lock().unwrap().is_some()
+    }
+}
+
+struct FakeTermHandle(Arc<FakeTerm>);
+
+impl TermSession for FakeTermHandle {
+    fn write(&self, bytes: &[u8]) -> PResult<()> {
+        let t = &self.0;
+        t.input.lock().unwrap().extend_from_slice(bytes);
+        if let Some(out) = t.output.lock().unwrap().as_mut() {
+            out(bytes);
+        }
+        if bytes.windows(4).any(|w| w == b"exit") {
+            t.end(0);
+        }
+        Ok(())
+    }
+    fn resize(&self, cols: u16, rows: u16) -> PResult<()> {
+        helm_win_terminal::validate_size(cols, rows)
+            .map_err(|e| RpcError::bad_params(e.to_string()))?;
+        *self.0.size.lock().unwrap() = (cols, rows);
+        Ok(())
+    }
+    fn kill(&self) -> PResult<()> {
+        if !self.0.killed.swap(true, Ordering::SeqCst) {
+            self.0.end(1);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FakeTermHandle {
+    fn drop(&mut self) {
+        if self.0.is_running() {
+            let _ = self.kill();
+        }
+    }
+}
+
+struct FakePen {
+    samples: Arc<Mutex<Vec<PenSample>>>,
+    releases: Arc<AtomicU64>,
+}
+
+impl PenDevice for FakePen {
+    fn inject(&self, sample: &PenSample) -> PResult<()> {
+        self.samples.lock().unwrap().push(*sample);
+        Ok(())
+    }
+    fn release(&self) -> PResult<()> {
+        Ok(())
+    }
+}
+
+impl Drop for FakePen {
+    fn drop(&mut self) {
+        self.releases.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// `(method, url, status, body)`.
+type Route = (String, String, u16, Vec<u8>);
+
+/// Scripted HTTP: `(method, url)` → `(status, body)`; anything else gets 404.
+#[derive(Debug, Default)]
+pub struct FakeHttp {
+    routes: Mutex<Vec<Route>>,
+    requests: Mutex<Vec<HttpRequest>>,
+}
+
+impl FakeHttp {
+    pub fn route(&self, method: &str, url: &str, status: u16, body: &str) {
+        self.routes.lock().unwrap().push((
+            method.into(),
+            url.into(),
+            status,
+            body.as_bytes().to_vec(),
+        ));
+    }
+    pub fn requests(&self) -> Vec<HttpRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl HttpTransport for FakeHttp {
+    fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.requests.lock().unwrap().push(req.clone());
+        let routes = self.routes.lock().unwrap();
+        let (status, body) = routes
+            .iter()
+            .rev()
+            .find(|(m, u, _, _)| *m == req.method && *u == req.url)
+            .map(|(_, _, s, b)| (*s, b.clone()))
+            .unwrap_or((404, b"not found".to_vec()));
+        Ok(HttpResponse {
+            status,
+            headers: vec![("Content-Type".into(), "application/json".into())],
+            body,
+        })
+    }
+}
+

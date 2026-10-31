@@ -23,11 +23,17 @@ pub use helm_win_sysmon::process::{Priority, ProcessInfo};
 pub use helm_win_sysmon::stats::Stats;
 pub use helm_win_sysmon::window::{Snap, VirtualDesktop};
 pub use helm_win_system::audio::AudioSession;
+// Phase 5
+pub use helm_plugins::http::{HttpError, HttpRequest, HttpResponse, HttpTransport};
+pub use helm_win_notify::{ReplyBox, Toast, ToastAction, ToastEvent};
+pub use helm_win_pen::{PenPhase, PenSample};
+pub use helm_win_terminal::Shell;
 
 use crate::router::RpcError;
 
 pub mod fake;
 pub mod real;
+mod real5;
 
 pub type PResult<T> = Result<T, RpcError>;
 
@@ -246,6 +252,31 @@ pub trait Platform: Send + Sync + Debug + 'static {
 
     /// Start the foreground-window watcher (profiles). Dropping the guard stops it.
     fn start_foreground_watcher(&self, sink: ForegroundSink) -> WatchGuard;
+
+    // ---- Phase 5 (extras) ----
+
+    /// Open an MP4 file for writing at `path` (the folder exists).
+    fn start_recorder(&self, path: &std::path::Path, config: RecordConfig)
+    -> PResult<Arc<dyn Recorder>>;
+    /// Start a shell in a pseudo console (cwd: the user's profile folder).
+    fn open_terminal(
+        &self,
+        shell: Shell,
+        cols: u16,
+        rows: u16,
+        on_output: TermOutput,
+        on_exit: TermExit,
+    ) -> PResult<Box<dyn TermSession>>;
+    /// A synthetic pen device (one per session).
+    fn new_pen(&self) -> PResult<Box<dyn PenDevice>>;
+    /// Show a Windows toast; `on_event` gets clicks while the agent runs.
+    fn show_toast(&self, toast: &Toast, on_event: ToastCallback) -> PResult<()>;
+    /// HTTP(S) client for plugins and Home Assistant.
+    fn http(&self) -> Arc<dyn HttpTransport>;
+    /// SSID of the connected Wi-Fi network (`None` = not on Wi-Fi or not readable).
+    fn wifi_ssid(&self) -> PResult<Option<String>>;
+    /// Local time minus UTC, in minutes (time triggers).
+    fn utc_offset_minutes(&self) -> i32;
 }
 
 /// Collects [`Stats`] snapshots (blocking).
@@ -254,6 +285,56 @@ pub trait StatsSampler: Send + Sync {
 }
 
 pub type ForegroundSink = mpsc::UnboundedSender<ForegroundInfo>;
+
+// ---- Phase 5 types ----
+
+/// What an MP4 recording contains (video size is the encoder's picture size).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordConfig {
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub audio: bool,
+}
+
+/// A finished recording.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedFile {
+    pub path: String,
+    pub duration_ms: u64,
+}
+
+/// An MP4 being written. Pushes never block for long; the first error is kept and returned
+/// by [`Recorder::stop`]. Timestamps are on one clock (µs), video starting at a keyframe.
+pub trait Recorder: Send + Sync {
+    fn push_video(&self, annex_b: &[u8], is_key: bool, pts_us: u64);
+    /// One Opus packet (48 kHz stereo, 20 ms) as produced by [`Platform::start_audio`].
+    fn push_audio_opus(&self, packet: &[u8], pts_us: u64);
+    /// Finalize the file. Blocking.
+    fn stop(&self) -> PResult<RecordedFile>;
+}
+
+/// Raw VT output of a terminal (called on a reader thread; must not block).
+pub type TermOutput = Box<dyn FnMut(&[u8]) + Send + 'static>;
+/// The shell ended (exit code), after all output was delivered.
+pub type TermExit = Box<dyn FnOnce(u32) + Send + 'static>;
+
+/// One pseudo-console shell. Dropping it kills the shell and everything it started.
+pub trait TermSession: Send + Sync {
+    fn write(&self, bytes: &[u8]) -> PResult<()>;
+    fn resize(&self, cols: u16, rows: u16) -> PResult<()>;
+    fn kill(&self) -> PResult<()>;
+}
+
+/// A synthetic pen. Dropping it lifts the pen.
+pub trait PenDevice: Send {
+    /// `sample` is in physical virtual-desktop pixels.
+    fn inject(&self, sample: &PenSample) -> PResult<()>;
+    fn release(&self) -> PResult<()>;
+}
+
+/// Toast activation / dismissal (called on a system thread).
+pub type ToastCallback = Box<dyn Fn(ToastEvent) + Send + Sync + 'static>;
 
 /// Run a blocking platform call off the async runtime.
 pub async fn blocking<T, F>(f: F) -> PResult<T>
@@ -288,6 +369,18 @@ pub(crate) fn sysmon_err(e: helm_win_sysmon::Error) -> RpcError {
         helm_win_sysmon::Error::InvalidArgument(m) => RpcError::bad_params(m),
         helm_win_sysmon::Error::NotFound(m) => RpcError::bad_params(format!("not found: {m}")),
         helm_win_sysmon::Error::Refused(m) => RpcError::forbidden(format!("refused: {m}")),
+        other => RpcError::internal(other.to_string()),
+    }
+}
+
+/// Map a recording error.
+pub(crate) fn record_err(e: helm_win_record::Error) -> RpcError {
+    match e {
+        helm_win_record::Error::InvalidInput(m) => RpcError::bad_params(m),
+        helm_win_record::Error::Unsupported(m) => RpcError::unsupported(m),
+        helm_win_record::Error::NoVideo => {
+            RpcError::internal("no video frame was received; nothing was recorded")
+        }
         other => RpcError::internal(other.to_string()),
     }
 }

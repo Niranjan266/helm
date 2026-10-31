@@ -71,6 +71,12 @@ pub struct Config {
     pub windows_poll: Duration,
     /// Lifetime of `stream.start` tokens (30 s by protocol; tests shorten it).
     pub stream_token_lifetime: Duration,
+    /// Where recordings are saved (default `<Videos>\Helm`).
+    pub videos_dir: Option<PathBuf>,
+    /// How often time triggers are checked (30 s; tests shorten it).
+    pub trigger_tick: Duration,
+    /// How often the Wi-Fi SSID is read for `wifi` triggers (5 s).
+    pub wifi_poll: Duration,
 }
 
 impl Config {
@@ -90,6 +96,9 @@ impl Config {
             download_root: None,
             windows_poll: Duration::from_secs(2),
             stream_token_lifetime: crate::stream::TOKEN_LIFETIME,
+            videos_dir: None,
+            trigger_tick: crate::p5::TRIGGER_TICK,
+            wifi_poll: crate::p5::WIFI_POLL,
         }
     }
 }
@@ -125,6 +134,8 @@ pub struct AppState {
     pub relay: crate::relay::Relay,
     /// Phase 3: alerts, profiles, stats streams.
     pub p3: crate::p3::P3State,
+    /// Phase 5: recordings, terminals, plugins, triggers, Home Assistant.
+    pub p5: crate::p5::P5State,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -178,6 +189,15 @@ impl AppState {
                 .unwrap_or_else(paths::profile_dir),
             relay: crate::relay::Relay::load(&config.data_dir),
             p3: crate::p3::P3State::new(&config.data_dir),
+            p5: crate::p5::P5State::new(
+                &config.data_dir,
+                config
+                    .videos_dir
+                    .clone()
+                    .unwrap_or_else(paths::helm_videos_dir),
+                config.trigger_tick,
+                config.wifi_poll,
+            ),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -388,6 +408,7 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         tokio::spawn(poll_windows(state.clone())),
     ];
     background.extend(crate::p3::spawn(&state));
+    background.extend(crate::p5::spawn(&state));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     background.push(tokio::spawn(crate::relay::run(
@@ -862,6 +883,7 @@ async fn run_session<S>(
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .insert(session_id, session.clone());
+    crate::p5::session_started(&state, &device_id);
     let ctx = RequestContext {
         device_id: device_id.clone(),
         tier,
@@ -938,6 +960,7 @@ async fn run_session<S>(
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .remove(&session_id);
+    crate::p5::session_ended(&state, session_id, &device_id).await;
     session.finish().await;
     if !writer_done {
         let _ = tx.send(Outgoing::Close(CloseCode::Normal, ""));

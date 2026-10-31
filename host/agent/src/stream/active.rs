@@ -46,6 +46,8 @@ pub struct ActiveStream {
     attached: AtomicBool,
     stopped: AtomicBool,
     cursor_stop: Mutex<Option<std_mpsc::Sender<()>>>,
+    /// Phase 5: a recording fed from this stream's encoder.
+    record_tap: Mutex<Option<Arc<crate::p5::record::Recording>>>,
 }
 
 impl std::fmt::Debug for ActiveStream {
@@ -89,6 +91,7 @@ impl ActiveStream {
             attached: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
             cursor_stop: Mutex::new(None),
+            record_tap: Mutex::new(None),
         });
         stream.start_video(params).await?;
         let mut audio = None;
@@ -172,6 +175,10 @@ impl ActiveStream {
     }
 
     fn on_video(&self, au: &[u8], key: bool, pts: u64) {
+        let tap = lock(&self.record_tap).clone();
+        if let Some(rec) = tap {
+            rec.on_video(au, key, pts);
+        }
         if !self.is_attached() || self.is_stopped() {
             return;
         }
@@ -183,12 +190,34 @@ impl ActiveStream {
     }
 
     fn on_audio(&self, packet: &[u8], pts: u64) {
+        let tap = lock(&self.record_tap).clone();
+        if let Some(rec) = tap.filter(|r| r.wants_stream_audio()) {
+            rec.on_audio(packet, pts);
+        }
         if !self.is_attached() || self.is_stopped() {
             return;
         }
         let pts = lock(&self.clock).audio_pts(pts, Instant::now());
         lock(&self.queue).push_audio(encode_frame(KIND_AUDIO, pts, packet));
         self.notify.notify_one();
+    }
+
+    /// Feed encoded video (and audio) to a recording too.
+    pub fn set_record_tap(&self, rec: Option<Arc<crate::p5::record::Recording>>) {
+        *lock(&self.record_tap) = rec;
+    }
+
+    /// Remove `rec` if it is the current tap.
+    pub fn clear_record_tap(&self, rec: &Arc<crate::p5::record::Recording>) {
+        let mut tap = lock(&self.record_tap);
+        if tap.as_ref().is_some_and(|t| Arc::ptr_eq(t, rec)) {
+            *tap = None;
+        }
+    }
+
+    /// System audio runs with this stream.
+    pub fn has_audio(&self) -> bool {
+        lock(&self.audio).is_some()
     }
 
     pub fn request_keyframe(&self) {

@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use super::{check_open_target, internal, str_param, typed_param};
 use crate::platform::{InputEvent, blocking};
 use crate::router::{MethodSpec, Module, RequestContext, RpcError, Tier};
+use crate::server::AppState;
+use std::sync::Arc;
 use crate::store::{self, DeckAction, DeckButton, Tile};
 
 pub struct LayoutModule;
@@ -72,7 +74,7 @@ impl Module for LayoutModule {
                     .into_iter()
                     .find(|b| b.id == id)
                     .ok_or_else(|| RpcError::bad_params(format!("no deck button {id:?}")))?;
-                run_action(ctx, button.action).await?;
+                run_action(&ctx.state, button.action).await?;
                 Ok(json!({}))
             }
             _ => Err(RpcError::unknown_method(method)),
@@ -81,8 +83,8 @@ impl Module for LayoutModule {
 }
 
 /// Inject a short sequence with a fresh injector (released when done).
-async fn inject(ctx: &RequestContext, event: InputEvent) -> Result<(), RpcError> {
-    let p = ctx.state.platform.clone();
+async fn inject(state: &Arc<AppState>, event: InputEvent) -> Result<(), RpcError> {
+    let p = state.platform.clone();
     blocking(move || {
         let injector = p.new_injector()?;
         let r = injector.inject(&event);
@@ -97,40 +99,42 @@ async fn inject(ctx: &RequestContext, event: InputEvent) -> Result<(), RpcError>
     .await
 }
 
+/// Run a deck action (deck buttons, triggers, plugins).
 pub(crate) fn run_action<'a>(
-    ctx: &'a RequestContext,
+    state: &'a Arc<AppState>,
     action: DeckAction,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), RpcError>> + Send + 'a>> {
-    Box::pin(run_action_inner(ctx, action))
+    Box::pin(run_action_inner(state, action))
 }
 
-async fn run_action_inner(ctx: &RequestContext, action: DeckAction) -> Result<(), RpcError> {
-    let p = ctx.state.platform.clone();
+async fn run_action_inner(state: &Arc<AppState>, action: DeckAction) -> Result<(), RpcError> {
+    let p = state.platform.clone();
     match action {
         DeckAction::Macro(steps) => {
             for step in steps {
-                run_action(ctx, step).await?;
+                run_action(state, step).await?;
             }
             Ok(())
         }
         DeckAction::Repeat(r) => {
             for _ in 0..r.times.min(store::MAX_MACRO_STEPS as u32) {
-                run_action(ctx, (*r.action).clone()).await?;
+                run_action(state, (*r.action).clone()).await?;
             }
             Ok(())
         }
         DeckAction::Remote(name) => {
             if let Some(combo) = store::remote_hotkey(&name) {
-                return run_action(ctx, DeckAction::Hotkey(combo.to_string())).await;
+                return run_action(state, DeckAction::Hotkey(combo.to_string())).await;
             }
-            crate::obs::run_remote(&ctx.state.data_dir, &name).await
+            crate::obs::run_remote(&state.data_dir, &name).await
         }
+        DeckAction::Ha(call) => crate::p5::ha_call(state, &call).await,
         DeckAction::Hotkey(combo) => {
             let keys = helm_win_input::parse_shortcut(&combo)
                 .ok_or_else(|| RpcError::bad_params(format!("unknown hotkey {combo:?}")))?;
-            inject(ctx, InputEvent::Shortcut { keys }).await
+            inject(state, InputEvent::Shortcut { keys }).await
         }
-        DeckAction::Text(text) => inject(ctx, InputEvent::Text { text }).await,
+        DeckAction::Text(text) => inject(state, InputEvent::Text { text }).await,
         DeckAction::Launch(app_id) => blocking(move || p.launch_app(&app_id)).await,
         DeckAction::Open(target) => {
             let target = check_open_target(&target)?;

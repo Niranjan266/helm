@@ -56,6 +56,7 @@ pub async fn start_fake_with(
     std::fs::create_dir_all(dir.join("profile")).unwrap();
     config.download_root = Some(dir.join("profile"));
     config.windows_poll = Duration::from_millis(100);
+    config.videos_dir = Some(dir.join("videos"));
     tweak(&mut config);
     // Safety net: tests must never drive the real PC.
     assert!(config.platform.is_some() && config.power_dry_run);

@@ -36,6 +36,15 @@ pub fn helm_downloads_dir() -> PathBuf {
     profile_dir().join("Downloads").join("Helm")
 }
 
+/// Where recordings go: `<Videos>\Helm`.
+pub fn helm_videos_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(p) = known_folder(&windows::Win32::UI::Shell::FOLDERID_Videos) {
+        return p.join("Helm");
+    }
+    profile_dir().join("Videos").join("Helm")
+}
+
 /// The user's roaming application data folder (`%APPDATA%`), from the environment or, when
 /// a launcher (e.g. a service) did not pass one, from the shell.
 pub fn roaming_app_data() -> Option<PathBuf> {

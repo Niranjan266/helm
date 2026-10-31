@@ -44,6 +44,12 @@ helm-win-input = { path = "../crates/helm-win-input" }
 helm-win-system = { path = "../crates/helm-win-system" }
 helm-update = { path = "../crates/helm-update" }
 helm-win-sysmon = { path = "../crates/helm-win-sysmon" }
+# Phase 5
+helm-win-record = { path = "../crates/helm-win-record" }
+helm-win-terminal = { path = "../crates/helm-win-terminal" }
+helm-win-pen = { path = "../crates/helm-win-pen" }
+helm-win-notify = { path = "../crates/helm-win-notify" }
+helm-plugins = { path = "../crates/helm-plugins" }
 
 [target.'cfg(windows)'.dependencies]
 helm-win-capture = { path = "../crates/helm-win-capture" }
@@ -54,6 +60,7 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
+    "Win32_NetworkManagement_WiFi",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
@@ -62,12 +69,14 @@ windows = { version = "0.62.2", features = [
     "Win32_System_RemoteDesktop",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_Time",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+wat = "1"
 
 # helm-win-audio's Opus codec (c2rust-translated libopus) is ~10x slower unoptimised and relies
 # on wrapping arithmetic; profiles only apply at the build root (see that crate's README).

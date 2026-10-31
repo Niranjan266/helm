@@ -11,6 +11,7 @@ use super::*;
 #[derive(Debug)]
 pub struct RealPlatform {
     icons: Option<IconCache>,
+    extras: super::real5::Extras,
 }
 
 impl RealPlatform {
@@ -23,7 +24,10 @@ impl RealPlatform {
                 None
             }
         };
-        RealPlatform { icons }
+        RealPlatform {
+            icons,
+            extras: Default::default(),
+        }
     }
 }
 
@@ -205,6 +209,39 @@ impl Platform for RealPlatform {
                 Box::new(())
             }
         }
+    }
+
+    fn start_recorder(
+        &self,
+        path: &Path,
+        config: RecordConfig,
+    ) -> PResult<Arc<dyn Recorder>> {
+        super::real5::start_recorder(path, config)
+    }
+    fn open_terminal(
+        &self,
+        shell: Shell,
+        cols: u16,
+        rows: u16,
+        on_output: TermOutput,
+        on_exit: TermExit,
+    ) -> PResult<Box<dyn TermSession>> {
+        super::real5::open_terminal(shell, cols, rows, on_output, on_exit)
+    }
+    fn new_pen(&self) -> PResult<Box<dyn PenDevice>> {
+        super::real5::new_pen()
+    }
+    fn show_toast(&self, toast: &Toast, on_event: ToastCallback) -> PResult<()> {
+        self.extras.show_toast(toast, on_event)
+    }
+    fn http(&self) -> Arc<dyn HttpTransport> {
+        self.extras.http()
+    }
+    fn wifi_ssid(&self) -> PResult<Option<String>> {
+        super::real5::wifi_ssid()
+    }
+    fn utc_offset_minutes(&self) -> i32 {
+        super::real5::utc_offset_minutes()
     }
 }
 
