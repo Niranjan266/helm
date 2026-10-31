@@ -17,6 +17,10 @@ pub mod relay;
 pub mod screen;
 pub mod stream;
 pub mod system;
+// Phase 3
+pub mod desktop;
+pub mod fs;
+pub mod monitor;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -32,6 +36,9 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(screen::ScreenModule),
         Arc::new(stream::StreamModule),
         Arc::new(relay::RelayModule),
+        Arc::new(monitor::MonitorModule),
+        Arc::new(desktop::DesktopModule),
+        Arc::new(fs::FsModule),
     ]
 }
 

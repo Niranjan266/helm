@@ -123,6 +123,8 @@ pub struct AppState {
     pub download_root: PathBuf,
     /// Phase 4 relay settings and status (`relay.json`).
     pub relay: crate::relay::Relay,
+    /// Phase 3: alerts, profiles, stats streams.
+    pub p3: crate::p3::P3State,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -175,6 +177,7 @@ impl AppState {
                 .clone()
                 .unwrap_or_else(paths::profile_dir),
             relay: crate::relay::Relay::load(&config.data_dir),
+            p3: crate::p3::P3State::new(&config.data_dir),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -384,6 +387,7 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         tokio::spawn(pump_events(state.clone(), events_rx)),
         tokio::spawn(poll_windows(state.clone())),
     ];
+    background.extend(crate::p3::spawn(&state));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     background.push(tokio::spawn(crate::relay::run(

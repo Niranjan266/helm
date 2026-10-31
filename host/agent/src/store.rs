@@ -50,6 +50,77 @@ pub enum DeckAction {
     Media(MediaAction),
     VolumeStep(f64),
     DelayMs(u64),
+    /// Phase 3: run actions in order (at most [`MAX_MACRO_STEPS`] steps in all).
+    Macro(Vec<DeckAction>),
+    /// Phase 3: run one action `times` times.
+    Repeat(Repeat),
+    /// Phase 3: PowerPoint / browser / OBS remote command (see [`REMOTE_ACTIONS`]).
+    Remote(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Repeat {
+    pub times: u32,
+    pub action: Box<DeckAction>,
+}
+
+/// Most leaf actions one button may run (macros and repeats expanded).
+pub const MAX_MACRO_STEPS: usize = 50;
+const MAX_NESTING: usize = 4;
+
+/// Fixed `remote` commands; `obs.scene:<name>` is also accepted.
+pub const REMOTE_ACTIONS: &[&str] = &[
+    "powerpoint.next",
+    "powerpoint.prev",
+    "powerpoint.start",
+    "powerpoint.end",
+    "browser.back",
+    "browser.forward",
+    "browser.tab_next",
+    "browser.tab_prev",
+    "browser.reload",
+    "obs.toggle_record",
+    "obs.toggle_stream",
+];
+
+/// Hotkey sent for a keyboard `remote` command (None = not a keyboard command).
+pub fn remote_hotkey(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "powerpoint.next" => "right",
+        "powerpoint.prev" => "left",
+        "powerpoint.start" => "f5",
+        "powerpoint.end" => "esc",
+        "browser.back" => "alt+left",
+        "browser.forward" => "alt+right",
+        "browser.tab_next" => "ctrl+tab",
+        "browser.tab_prev" => "ctrl+shift+tab",
+        "browser.reload" => "f5",
+        _ => return None,
+    })
+}
+
+/// Live state a button shows (`deck.state` events).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Bind {
+    MicMuted,
+    AudioMuted,
+    MediaPlaying,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateBinding {
+    pub bind: Bind,
+}
+
+/// Live text a button shows (`deck.widget` events).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Widget {
+    Cpu,
+    Ram,
+    Clock,
+    NowPlaying,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -60,6 +131,71 @@ pub struct DeckButton {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub action: DeckAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget: Option<Widget>,
+}
+
+/// Check one action (recursively); returns the number of leaf steps it runs.
+fn validate_action(action: &DeckAction, depth: usize) -> Result<usize, String> {
+    if depth > MAX_NESTING {
+        return Err(format!("actions nest at most {MAX_NESTING} levels deep"));
+    }
+    match action {
+        DeckAction::Hotkey(k) => {
+            if helm_win_input::parse_shortcut(k).is_none() {
+                return Err(format!("unknown hotkey {k:?}"));
+            }
+        }
+        DeckAction::Text(t) => check_len("text", t, MAX_TEXT, false)?,
+        DeckAction::Launch(a) => check_len("launch app_id", a, 1024, false)?,
+        DeckAction::Open(t) => check_len("open target", t, MAX_TEXT, false)?,
+        DeckAction::Media(_) => {}
+        DeckAction::VolumeStep(s) => {
+            if !s.is_finite() || !(-1.0..=1.0).contains(s) {
+                return Err("volume_step must be between -1 and 1".into());
+            }
+        }
+        DeckAction::DelayMs(ms) => {
+            if *ms > MAX_DELAY_MS {
+                return Err(format!("delay_ms must be at most {MAX_DELAY_MS}"));
+            }
+        }
+        DeckAction::Remote(name) => {
+            let ok = REMOTE_ACTIONS.contains(&name.as_str())
+                || name
+                    .strip_prefix("obs.scene:")
+                    .is_some_and(|scene| check_len("scene", scene, 256, false).is_ok());
+            if !ok {
+                return Err(format!("unknown remote action {name:?}"));
+            }
+        }
+        DeckAction::Macro(steps) => {
+            if steps.is_empty() {
+                return Err("macro must not be empty".into());
+            }
+            let mut total = 0usize;
+            for s in steps {
+                total += validate_action(s, depth + 1)?;
+                if total > MAX_MACRO_STEPS {
+                    return Err(format!("at most {MAX_MACRO_STEPS} steps per button"));
+                }
+            }
+            return Ok(total);
+        }
+        DeckAction::Repeat(r) => {
+            if r.times == 0 || r.times as usize > MAX_MACRO_STEPS {
+                return Err(format!("repeat times must be 1..={MAX_MACRO_STEPS}"));
+            }
+            let total = validate_action(&r.action, depth + 1)? * r.times as usize;
+            if total > MAX_MACRO_STEPS {
+                return Err(format!("at most {MAX_MACRO_STEPS} steps per button"));
+            }
+            return Ok(total);
+        }
+    }
+    Ok(1)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -134,27 +270,7 @@ pub fn validate_buttons(buttons: &[DeckButton]) -> Result<(), String> {
         if let Some(i) = &b.icon {
             check_len("icon", i, 64, true)?;
         }
-        match &b.action {
-            DeckAction::Hotkey(k) => {
-                if helm_win_input::parse_shortcut(k).is_none() {
-                    return Err(format!("unknown hotkey {k:?}"));
-                }
-            }
-            DeckAction::Text(t) => check_len("text", t, MAX_TEXT, false)?,
-            DeckAction::Launch(a) => check_len("launch app_id", a, 1024, false)?,
-            DeckAction::Open(t) => check_len("open target", t, MAX_TEXT, false)?,
-            DeckAction::Media(_) => {}
-            DeckAction::VolumeStep(s) => {
-                if !s.is_finite() || !(-1.0..=1.0).contains(s) {
-                    return Err("volume_step must be between -1 and 1".into());
-                }
-            }
-            DeckAction::DelayMs(ms) => {
-                if *ms > MAX_DELAY_MS {
-                    return Err(format!("delay_ms must be at most {MAX_DELAY_MS}"));
-                }
-            }
-        }
+        validate_action(&b.action, 0)?;
     }
     Ok(())
 }
@@ -165,7 +281,7 @@ pub struct LayoutStore {
     lock: Mutex<()>,
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path) -> anyhow::Result<Option<T>> {
+pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> anyhow::Result<Option<T>> {
     match std::fs::read_to_string(path) {
         Ok(text) if text.trim().is_empty() => Ok(None),
         Ok(text) => Ok(Some(serde_json::from_str(&text)?)),
@@ -227,7 +343,7 @@ impl LayoutStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn deck_action_shapes() {
@@ -268,11 +384,50 @@ mod tests {
             color: "#ff0000".into(),
             icon: None,
             action,
+            state: None,
+            widget: None,
         };
         assert!(validate_buttons(&[b(DeckAction::Hotkey("ctrl+c".into()))]).is_ok());
         assert!(validate_buttons(&[b(DeckAction::Hotkey("ctrl+nope".into()))]).is_err());
         assert!(validate_buttons(&[b(DeckAction::VolumeStep(3.0))]).is_err());
         assert!(validate_buttons(&[b(DeckAction::DelayMs(MAX_DELAY_MS + 1))]).is_err());
+    }
+
+    #[test]
+    fn phase3_actions_validate() {
+        let b = |action: Value| {
+            let v = json!({"id":"b","label":"B","color":"#000000","action":action});
+            serde_json::from_value::<DeckButton>(v).map(|b| validate_buttons(&[b]))
+        };
+        let ok = |a: Value| assert!(matches!(b(a.clone()), Ok(Ok(()))), "{a}");
+        let bad = |a: Value| assert!(!matches!(b(a.clone()), Ok(Ok(()))), "{a}");
+        ok(json!({"macro":[{"hotkey":"ctrl+c"},{"delay_ms":100},{"text":"x"}]}));
+        ok(json!({"repeat":{"times":5,"action":{"volume_step":0.02}}}));
+        ok(json!({"remote":"powerpoint.next"}));
+        ok(json!({"remote":"obs.scene:Gaming"}));
+        bad(json!({"remote":"obs.scene:"}));
+        bad(json!({"remote":"rm -rf"}));
+        bad(json!({"macro":[]}));
+        bad(json!({"repeat":{"times":0,"action":{"text":"x"}}}));
+        // 51 expanded steps
+        bad(json!({"macro":[{"repeat":{"times":50,"action":{"text":"x"}}},{"text":"y"}]}));
+        let deep = json!({"macro":[{"macro":[{"macro":[{"macro":[{"macro":[{"text":"x"}]}]}]}]}]});
+        bad(deep);
+        for name in REMOTE_ACTIONS {
+            if let Some(k) = remote_hotkey(name) {
+                assert!(helm_win_input::parse_shortcut(k).is_some(), "{k}");
+            }
+        }
+        let with_state = json!({"id":"m","label":"Mic","color":"#000000",
+            "action":{"hotkey":"ctrl+shift+m"},"state":{"bind":"mic_muted"},"widget":"cpu"});
+        let parsed: DeckButton = serde_json::from_value(with_state.clone()).unwrap();
+        assert_eq!(
+            parsed.state,
+            Some(StateBinding {
+                bind: Bind::MicMuted
+            })
+        );
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), with_state);
     }
 
     #[test]

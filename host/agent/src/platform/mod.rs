@@ -5,6 +5,7 @@
 //! All methods are **blocking**; callers use `tokio::task::spawn_blocking`.
 
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -16,6 +17,12 @@ pub use helm_win_system::display::Display;
 pub use helm_win_system::info::Battery;
 pub use helm_win_system::media::{MediaAction, MediaState};
 pub use helm_win_system::net::Adapter;
+// Phase 3
+pub use helm_win_sysmon::foreground::ForegroundInfo;
+pub use helm_win_sysmon::process::{Priority, ProcessInfo};
+pub use helm_win_sysmon::stats::Stats;
+pub use helm_win_sysmon::window::{Snap, VirtualDesktop};
+pub use helm_win_system::audio::AudioSession;
 
 use crate::router::RpcError;
 
@@ -213,7 +220,40 @@ pub trait Platform: Send + Sync + Debug + 'static {
     fn cursor(&self) -> PResult<CursorState>;
     /// The image for `handle` (from [`Platform::cursor`]); `None` if it is gone.
     fn cursor_shape(&self, handle: u64) -> PResult<Option<CursorShape>>;
+    // ---- Phase 3 (power user) ----
+
+    /// A fresh stats sampler (rates are relative to its own previous sample).
+    fn new_stats_sampler(&self) -> Arc<dyn StatsSampler>;
+    fn processes(&self) -> PResult<Vec<ProcessInfo>>;
+    /// The agent already refused pid 0, 4 and itself.
+    fn kill_process(&self, pid: u32) -> PResult<()>;
+    fn set_process_priority(&self, pid: u32, level: Priority) -> PResult<()>;
+
+    fn audio_sessions(&self) -> PResult<Vec<AudioSession>>;
+    fn set_session_volume(&self, id: &str, level: f32) -> PResult<()>;
+    fn set_session_muted(&self, id: &str, muted: bool) -> PResult<()>;
+    /// Default microphone muted; `None` when there is no microphone.
+    fn mic_muted(&self) -> PResult<Option<bool>>;
+
+    fn move_window_to_monitor(&self, hwnd: u64, monitor_index: usize) -> PResult<()>;
+    fn snap_window(&self, hwnd: u64, pos: Snap) -> PResult<()>;
+    fn virtual_desktop(&self, action: VirtualDesktop) -> PResult<()>;
+
+    /// Fixed (non-removable, non-network) drive roots such as `C:\`.
+    fn fixed_drives(&self) -> PResult<Vec<std::path::PathBuf>>;
+    /// Local wall-clock time as `HH:MM` (deck clock widget).
+    fn local_clock(&self) -> PResult<String>;
+
+    /// Start the foreground-window watcher (profiles). Dropping the guard stops it.
+    fn start_foreground_watcher(&self, sink: ForegroundSink) -> WatchGuard;
 }
+
+/// Collects [`Stats`] snapshots (blocking).
+pub trait StatsSampler: Send + Sync {
+    fn sample(&self) -> PResult<Stats>;
+}
+
+pub type ForegroundSink = mpsc::UnboundedSender<ForegroundInfo>;
 
 /// Run a blocking platform call off the async runtime.
 pub async fn blocking<T, F>(f: F) -> PResult<T>
@@ -239,6 +279,15 @@ pub(crate) fn system_err(e: helm_win_system::Error) -> RpcError {
         helm_win_system::Error::InvalidArgument(m) => RpcError::bad_params(m),
         helm_win_system::Error::NotFound(m) => RpcError::bad_params(format!("not found: {m}")),
         helm_win_system::Error::Rejected(m) => RpcError::bad_params(format!("rejected: {m}")),
+        other => RpcError::internal(other.to_string()),
+    }
+}
+
+pub(crate) fn sysmon_err(e: helm_win_sysmon::Error) -> RpcError {
+    match e {
+        helm_win_sysmon::Error::InvalidArgument(m) => RpcError::bad_params(m),
+        helm_win_sysmon::Error::NotFound(m) => RpcError::bad_params(format!("not found: {m}")),
+        helm_win_sysmon::Error::Refused(m) => RpcError::forbidden(format!("refused: {m}")),
         other => RpcError::internal(other.to_string()),
     }
 }

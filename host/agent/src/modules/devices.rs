@@ -16,7 +16,18 @@ const METHODS: &[MethodSpec] = &[
         name: "devices.revoke",
         min_tier: Tier::Admin,
     },
+    MethodSpec {
+        name: "devices.set_tier",
+        min_tier: Tier::Admin,
+    },
+    MethodSpec {
+        name: "audit.list",
+        min_tier: Tier::Admin,
+    },
 ];
+
+/// Most lines `audit.list` returns.
+const MAX_AUDIT_LINES: u64 = 1000;
 
 #[async_trait]
 impl Module for DevicesModule {
@@ -78,6 +89,44 @@ impl Module for DevicesModule {
                 // (self-revoke) is closed by the server after this response is sent.
                 state.kick_device(&target, Some(ctx.session_id));
                 Ok(json!({"revoked": true}))
+            }
+            "devices.set_tier" => {
+                let target = super::str_param(&params, "device_id")?.to_string();
+                let tier: Tier = super::typed_param(&params, "tier")?;
+                if target == ctx.device_id {
+                    return Err(RpcError::bad_params(
+                        "a device cannot change its own tier (use another admin device)",
+                    ));
+                }
+                let found = state
+                    .devices
+                    .set_tier(&target, tier)
+                    .map_err(|e| RpcError::internal(e.to_string()))?;
+                if !found {
+                    return Err(RpcError::bad_params("no such device"));
+                }
+                state.audit.record(
+                    "set_tier",
+                    Some(&target),
+                    Some(&ctx.peer),
+                    &format!("tier={} by={}", tier.as_str(), ctx.device_id),
+                );
+                // Open sessions keep the tier they authenticated with; make them reconnect.
+                state.kick_device(&target, None);
+                Ok(json!({}))
+            }
+            "audit.list" => {
+                let limit = super::opt_u64(&params, "limit")?
+                    .unwrap_or(200)
+                    .min(MAX_AUDIT_LINES) as usize;
+                let st = state.clone();
+                let lines = crate::platform::blocking(move || {
+                    st.audit
+                        .tail(limit)
+                        .map_err(|e| RpcError::internal(e.to_string()))
+                })
+                .await?;
+                Ok(json!({"lines": lines}))
             }
             _ => Err(RpcError::unknown_method(method)),
         }

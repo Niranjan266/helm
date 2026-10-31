@@ -97,9 +97,34 @@ async fn inject(ctx: &RequestContext, event: InputEvent) -> Result<(), RpcError>
     .await
 }
 
-pub(crate) async fn run_action(ctx: &RequestContext, action: DeckAction) -> Result<(), RpcError> {
+pub(crate) fn run_action<'a>(
+    ctx: &'a RequestContext,
+    action: DeckAction,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), RpcError>> + Send + 'a>> {
+    Box::pin(run_action_inner(ctx, action))
+}
+
+async fn run_action_inner(ctx: &RequestContext, action: DeckAction) -> Result<(), RpcError> {
     let p = ctx.state.platform.clone();
     match action {
+        DeckAction::Macro(steps) => {
+            for step in steps {
+                run_action(ctx, step).await?;
+            }
+            Ok(())
+        }
+        DeckAction::Repeat(r) => {
+            for _ in 0..r.times.min(store::MAX_MACRO_STEPS as u32) {
+                run_action(ctx, (*r.action).clone()).await?;
+            }
+            Ok(())
+        }
+        DeckAction::Remote(name) => {
+            if let Some(combo) = store::remote_hotkey(&name) {
+                return run_action(ctx, DeckAction::Hotkey(combo.to_string())).await;
+            }
+            crate::obs::run_remote(&ctx.state.data_dir, &name).await
+        }
         DeckAction::Hotkey(combo) => {
             let keys = helm_win_input::parse_shortcut(&combo)
                 .ok_or_else(|| RpcError::bad_params(format!("unknown hotkey {combo:?}")))?;

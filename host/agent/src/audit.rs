@@ -58,9 +58,38 @@ impl AuditLog {
     }
 }
 
+impl AuditLog {
+    /// The last `limit` lines, oldest first. A missing log is empty.
+    pub fn tail(&self, limit: usize) -> std::io::Result<Vec<String>> {
+        let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let text = match std::fs::read(&self.path) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        let start = lines.len().saturating_sub(limit);
+        Ok(lines[start..].iter().map(|l| l.to_string()).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tail_returns_last_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = AuditLog::new(dir.path());
+        assert!(log.tail(5).unwrap().is_empty());
+        for i in 0..5 {
+            log.record("e", None, None, &format!("n={i}"));
+        }
+        let t = log.tail(2).unwrap();
+        assert_eq!(t.len(), 2);
+        assert!(t[0].ends_with("n=3") && t[1].ends_with("n=4"));
+        assert_eq!(log.tail(100).unwrap().len(), 5);
+    }
 
     #[test]
     fn appends_lines() {
