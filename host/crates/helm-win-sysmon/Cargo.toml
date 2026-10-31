@@ -1,0 +1,38 @@
+[package]
+name = "helm-win-sysmon"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Helm: system monitor, task manager, foreground watcher, window/virtual-desktop helpers and alerts"
+license = "MIT"
+publish = false
+
+[lib]
+name = "helm_win_sysmon"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+sysinfo = { version = "0.37.2", default-features = false, features = ["system", "disk", "network"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    # GPU counters
+    "Win32_System_Performance",
+    # GPU adapter names / VRAM size
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    # Foreground hook, windows, monitors, input
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+] }
+
+[dev-dependencies]
+serde_json = "1.0.154"
