@@ -1,0 +1,46 @@
+[package]
+name = "helm-win-capture"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Helm: Windows screen screenshots (GDI) and low-latency H.264 screen streaming (Windows.Graphics.Capture + Media Foundation)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "helm_win_capture"
+path = "src/lib.rs"
+
+[dependencies]
+png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+# `#[implement]` (used for IMFAsyncCallback) expands to paths in `windows_core`.
+windows-core = "0.62.2"
+windows = { version = "0.62.2", features = [
+    # WinRT: Windows.Graphics.Capture and its Direct3D interop types
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    # Win32
+    "Win32_Foundation",
+    "Win32_Devices_Display",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_Performance",
+    "Win32_System_LibraryLoader",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
