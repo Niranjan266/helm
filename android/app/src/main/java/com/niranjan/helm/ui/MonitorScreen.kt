@@ -15,10 +15,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -138,7 +136,7 @@ fun MonitorScreen(power: PowerViewModel) {
                     TextButton(onClick = { gate("Delete alert") { power.saveAlerts(rules.filterNot { it.id == r.id }) } }) { Text("Delete") }
                 }
             }
-            OutlinedButton(enabled = rules != null, onClick = { editing = AlertRule(UUID.randomUUID().toString().take(8), AlertRule.CPU_ABOVE, 90.0, 30) }) {
+            OutlineButton(enabled = rules != null, onClick = { editing = AlertRule(UUID.randomUUID().toString().take(8), AlertRule.CPU_ABOVE, 90.0, 30) }) {
                 Text("Add alert")
             }
         }
@@ -168,7 +166,7 @@ private fun AlertEditor(rule: AlertRule, onDismiss: () -> Unit, onSave: (AlertRu
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(AlertRule.CPU_ABOVE to "CPU", AlertRule.RAM_ABOVE to "RAM", AlertRule.DISK_FREE_BELOW to "Disk free").forEach { (k, l) ->
-                        FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(l) })
+                        BpFilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(l) })
                     }
                 }
                 OutlinedTextField(threshold, { threshold = it }, label = { Text(if (kind == AlertRule.DISK_FREE_BELOW) "Free space below (%)" else "Above (%)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))

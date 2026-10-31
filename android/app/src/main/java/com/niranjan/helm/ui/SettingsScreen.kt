@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,14 +33,11 @@ fun SettingsScreen(
             ToggleRow("Keep screen on while the Dock is open", settings.keepScreenOnInDock) { v -> onSettings { it.copy(keepScreenOnInDock = v) } }
             ToggleRow("Haptic feedback", settings.haptics) { v -> onSettings { it.copy(haptics = v) } }
             Text("Theme")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = settings.theme == ThemeMode.DARK, onClick = { onSettings { it.copy(theme = ThemeMode.DARK) } }, label = { Text("Dark") })
-                FilterChip(selected = settings.theme == ThemeMode.AMOLED, onClick = { onSettings { it.copy(theme = ThemeMode.AMOLED) } }, label = { Text("AMOLED black") })
-            }
+            ThemeChips(settings.theme) { t -> onSettings { it.copy(theme = t) } }
             Text("Dock tiles per page")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(4, 6, 8).forEach { n ->
-                    FilterChip(selected = settings.dockPageSize == n, onClick = { onSettings { it.copy(dockPageSize = n) } }, label = { Text("$n") })
+                    BpFilterChip(selected = settings.dockPageSize == n, onClick = { onSettings { it.copy(dockPageSize = n) } }, label = { Text("$n") })
                 }
             }
         }
@@ -55,13 +51,13 @@ fun SettingsScreen(
                     onPcPrefs { it.copy(touchpadSpeed = if (v) settings.touchpadSpeed else null) }
                 }
                 pcPrefs.touchpadSpeed?.let { sp ->
-                    Slider(value = sp, onValueChange = { v -> onPcPrefs { it.copy(touchpadSpeed = v) } }, valueRange = 0.4f..3f)
+                    DiamondSlider(value = sp, onValueChange = { v -> onPcPrefs { it.copy(touchpadSpeed = v) } }, valueRange = 0.4f..3f)
                 }
                 Text("Screen quality for this PC")
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = pcPrefs.streamPreset == null, onClick = { onPcPrefs { it.copy(streamPreset = null) } }, label = { Text("Default") })
+                    BpFilterChip(selected = pcPrefs.streamPreset == null, onClick = { onPcPrefs { it.copy(streamPreset = null) } }, label = { Text("Default") })
                     StreamPreset.entries.forEach { p ->
-                        FilterChip(selected = pcPrefs.streamPreset == p.name, onClick = { onPcPrefs { it.copy(streamPreset = p.name) } }, label = { Text(p.label) })
+                        BpFilterChip(selected = pcPrefs.streamPreset == p.name, onClick = { onPcPrefs { it.copy(streamPreset = p.name) } }, label = { Text(p.label) })
                     }
                 }
             }

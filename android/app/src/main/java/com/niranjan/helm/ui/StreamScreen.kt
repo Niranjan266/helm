@@ -10,9 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -158,7 +156,7 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
             if (!ui.streaming) StatusOverlay(ui, onRetry = { vm.setActive(false); vm.setActive(true) }, Modifier.align(Alignment.Center))
             if (!showControls && extrasUi.recording != null) RecordingDot(extrasUi, Modifier.align(Alignment.TopStart).padding(8.dp))
             if (!showControls) {
-                FilledTonalButton(
+                OutlineButton(filled = true, 
                     onClick = { showControls = true },
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
                 ) { Text("Controls") }
@@ -244,14 +242,14 @@ private fun StatsOverlay(ui: StreamUi, modifier: Modifier) {
         lines.joinToString("\n"),
         color = Color.White,
         style = MaterialTheme.typography.labelSmall,
-        modifier = modifier.background(Color(0x99000000), RoundedCornerShape(6.dp)).padding(6.dp),
+        modifier = modifier.background(Color(0x99000000), RoundedCornerShape(2.dp)).padding(6.dp),
     )
 }
 
 @Composable
 private fun StatusOverlay(ui: StreamUi, onRetry: () -> Unit, modifier: Modifier) {
     Column(
-        modifier.background(Color(0xCC000000), RoundedCornerShape(12.dp)).padding(16.dp),
+        modifier.background(Color(0xCC000000), RoundedCornerShape(2.dp)).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (!ui.supported) {
@@ -261,7 +259,7 @@ private fun StatusOverlay(ui: StreamUi, onRetry: () -> Unit, modifier: Modifier)
         CircularProgressIndicator()
         Text(ui.status, color = Color.White, modifier = Modifier.padding(top = 8.dp))
         ui.error?.let { Text(it, color = Color(0xFFFFB4AB), style = MaterialTheme.typography.bodySmall) }
-        Button(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) { Text("Retry now") }
+        PencilButton(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) { Text("Retry now") }
     }
 }
 
@@ -304,6 +302,6 @@ private fun RecordingDot(ui: ExtrasUi, modifier: Modifier) {
         "● REC ${secs / 60}:${"%02d".format(secs % 60)}",
         color = Color(0xFFFF5252),
         style = MaterialTheme.typography.labelMedium,
-        modifier = modifier.background(Color(0x99000000), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+        modifier = modifier.background(Color(0x99000000), RoundedCornerShape(2.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }

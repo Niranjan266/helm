@@ -1,5 +1,7 @@
 package com.niranjan.helm.ui
 
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -19,13 +21,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,7 +73,7 @@ fun DockScreen(remote: RemoteViewModel, settings: Settings, landscape: Boolean, 
                 Spacer(Modifier.height(8.dp))
                 HintText("Add apps, folders or links. Tap a tile to launch or switch to it; long-press to move or remove it.")
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = { adding = true }) { Text("Add to dock") }
+                PencilButton(onClick = { adding = true }) { Text("Add to dock") }
             }
         } else {
             val pager = rememberPagerState { pages.size }
@@ -117,8 +117,8 @@ fun DockScreen(remote: RemoteViewModel, settings: Settings, landscape: Boolean, 
                                     .padding(4.dp)
                                     .size(8.dp)
                                     .background(
-                                        if (i == pager.currentPage) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                        CircleShape,
+                                        if (i == pager.currentPage) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                        RectangleShape,
                                     ),
                             )
                         }
@@ -157,16 +157,16 @@ fun DockScreen(remote: RemoteViewModel, settings: Settings, landscape: Boolean, 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(label, { label = it }, label = { Text("Label") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { remote.moveTile(tile.id, -1) }, modifier = Modifier.weight(1f)) { Text("◀ Earlier") }
-                        OutlinedButton(onClick = { remote.moveTile(tile.id, +1) }, modifier = Modifier.weight(1f)) { Text("Later ▶") }
+                        OutlineButton(onClick = { remote.moveTile(tile.id, -1) }, modifier = Modifier.weight(1f)) { Text("◀ Earlier") }
+                        OutlineButton(onClick = { remote.moveTile(tile.id, +1) }, modifier = Modifier.weight(1f)) { Text("Later ▶") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
+                        OutlineButton(
                             enabled = pageIndex > 0,
                             onClick = { remote.moveTileToPage(tile.id, pageIndex - 1); editing = null },
                             modifier = Modifier.weight(1f),
                         ) { Text("Prev page") }
-                        OutlinedButton(
+                        OutlineButton(
                             onClick = { remote.moveTileToPage(tile.id, pageIndex + 1); editing = null },
                             modifier = Modifier.weight(1f),
                         ) { Text(if (pageIndex >= pages.lastIndex) "New page" else "Next page") }
@@ -190,10 +190,7 @@ fun DockScreen(remote: RemoteViewModel, settings: Settings, landscape: Boolean, 
 @Composable
 private fun DockTileView(tile: DockTile, running: Boolean, icons: IconLoader, onTap: () -> Unit, onLongPress: () -> Unit) {
     val name = tile.label ?: tile.appId ?: tile.target ?: "?"
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-        modifier = Modifier.fillMaxSize(),
-    ) {
+    BpCard(modifier = Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().combinedClickable(onClick = onTap, onLongClick = onLongPress)) {
             Column(
                 Modifier.fillMaxSize().padding(8.dp),
@@ -208,7 +205,7 @@ private fun DockTileView(tile: DockTile, running: Boolean, icons: IconLoader, on
                 Spacer(Modifier.height(8.dp))
                 Text(
                     name,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = BpType.mono.copy(fontSize = 12.sp),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,

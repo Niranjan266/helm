@@ -84,6 +84,17 @@ object EndpointPlanner {
         return out.toList()
     }
 
+    /**
+     * The saved address list after reaching the PC at [reached]: a new LAN address on the
+     * saved port goes first (so a later reconnect still knows it), capped at [MAX_ADDRESSES].
+     */
+    fun withAddress(pc: SavedPc, reached: Endpoint): List<String> {
+        if (reached.port != pc.port || reached.host in pc.addresses) return pc.addresses
+        return (listOf(reached.host) + pc.addresses).take(MAX_ADDRESSES)
+    }
+
+    const val MAX_ADDRESSES = 8
+
     /** Pairing: the QR addresses in order (LAN first, as the agent lists them). */
     fun forPairing(uri: PairingUri, discovered: DiscoveredHost? = null): List<Endpoint> {
         val out = LinkedHashSet<Endpoint>()

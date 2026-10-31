@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,10 +38,10 @@ fun WindowsScreen(remote: RemoteViewModel, power: PowerViewModel) {
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionCard("Virtual desktops") {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { power.desktop("prev") }) { Text("◀ Previous") }
-                OutlinedButton(onClick = { power.desktop("next") }) { Text("Next ▶") }
-                OutlinedButton(onClick = { power.desktop("new") }) { Text("New") }
-                OutlinedButton(onClick = { power.desktop("close") }) { Text("Close") }
+                OutlineButton(onClick = { power.desktop("prev") }) { Text("◀ Previous") }
+                OutlineButton(onClick = { power.desktop("next") }) { Text("Next ▶") }
+                OutlineButton(onClick = { power.desktop("new") }) { Text("New") }
+                OutlineButton(onClick = { power.desktop("close") }) { Text("Close") }
             }
         }
         LazyColumn(Modifier.fillMaxSize()) {
@@ -51,11 +50,11 @@ fun WindowsScreen(remote: RemoteViewModel, power: PowerViewModel) {
                     Text(w.title.ifBlank { w.appId ?: "Window" }, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (w.isForeground) FontWeight.Bold else null)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("left" to "◧ Left", "right" to "◨ Right", "maximize" to "Max", "restore" to "Restore").forEach { (pos, label) ->
-                            OutlinedButton(onClick = { power.snap(w, pos) }) { Text(label) }
+                            OutlineButton(onClick = { power.snap(w, pos) }) { Text(label) }
                         }
                         if (ui.monitors.size > 1) {
                             ui.monitors.forEachIndexed { i, m ->
-                                OutlinedButton(onClick = { power.moveToMonitor(w, i) }) { Text("→ ${m.name.ifBlank { "Monitor ${i + 1}" }}") }
+                                OutlineButton(onClick = { power.moveToMonitor(w, i) }) { Text("→ ${m.name.ifBlank { "Monitor ${i + 1}" }}") }
                             }
                         }
                     }
@@ -86,7 +85,7 @@ fun ProfilesScreen(remote: RemoteViewModel, power: PowerViewModel) {
                 }
             }
         }
-        OutlinedButton(enabled = list != null, onClick = { editing = Profile(remote.newId(), "") }) { Text("Add profile") }
+        OutlineButton(enabled = list != null, onClick = { editing = Profile(remote.newId(), "") }) { Text("Add profile") }
     }
     editing?.let { p ->
         var name by remember(p) { mutableStateOf(p.name) }

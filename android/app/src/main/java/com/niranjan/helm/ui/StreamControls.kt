@@ -13,9 +13,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,9 +57,9 @@ fun StreamControls(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FilterChip(selected = !settings.streamDirectTouch, onClick = { vm.setDirectTouch(false) }, label = { Text("Trackpad") })
-        FilterChip(selected = settings.streamDirectTouch, onClick = { vm.setDirectTouch(true) }, label = { Text("Touch") })
-        FilterChip(selected = keyboardOn, onClick = { onKeyboard(!keyboardOn) }, label = { Text("Keyboard") })
+        BpFilterChip(selected = !settings.streamDirectTouch, onClick = { vm.setDirectTouch(false) }, label = { Text("Trackpad") })
+        BpFilterChip(selected = settings.streamDirectTouch, onClick = { vm.setDirectTouch(true) }, label = { Text("Touch") })
+        BpFilterChip(selected = keyboardOn, onClick = { onKeyboard(!keyboardOn) }, label = { Text("Keyboard") })
 
         Picker(
             label = ui.monitor?.name ?: "Primary screen",
@@ -81,8 +79,8 @@ fun StreamControls(
             itemLabel = { "${"%.1f".format(it / 1000f)} Mbps" },
             onPick = vm::setBitrate,
         )
-        FilterChip(selected = settings.streamAudio, onClick = { vm.setAudio(!settings.streamAudio) }, label = { Text("Sound") })
-        FilterChip(selected = settings.streamShowStats, onClick = { vm.setShowStats(!settings.streamShowStats) }, label = { Text("Stats") })
+        BpFilterChip(selected = settings.streamAudio, onClick = { vm.setAudio(!settings.streamAudio) }, label = { Text("Sound") })
+        BpFilterChip(selected = settings.streamShowStats, onClick = { vm.setShowStats(!settings.streamShowStats) }, label = { Text("Stats") })
         TextButton(onClick = onResetView) { Text("Fit") }
         TextButton(onClick = vm::requestKeyframe) { Text("Refresh") }
         TextButton(onClick = onHide) { Text("Hide") }
@@ -93,7 +91,7 @@ fun StreamControls(
 private fun <T> Picker(label: String, items: List<T>, itemLabel: (T) -> String, onPick: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        OutlinedButton(onClick = { open = true }) { Text(label) }
+        OutlineButton(onClick = { open = true }) { Text(label) }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             items.forEach { item ->
                 DropdownMenuItem(text = { Text(itemLabel(item)) }, onClick = {
@@ -122,7 +120,7 @@ fun StreamKeyboard(remote: RemoteViewModel) {
         HorizontalDivider()
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf("Ctrl" to Vk.CONTROL, "Alt" to Vk.ALT, "Shift" to Vk.SHIFT, "Win" to Vk.LWIN).forEach { (label, vk) ->
-                FilterChip(selected = vk in mods, onClick = { if (vk in mods) mods.remove(vk) else mods.add(vk) }, label = { Text(label) })
+                BpFilterChip(selected = vk in mods, onClick = { if (vk in mods) mods.remove(vk) else mods.add(vk) }, label = { Text(label) })
             }
             val keys = listOf(
                 "Esc" to Vk.ESCAPE, "Tab" to Vk.TAB, "←" to Vk.LEFT, "↑" to Vk.UP, "↓" to Vk.DOWN, "→" to Vk.RIGHT,
@@ -130,7 +128,7 @@ fun StreamKeyboard(remote: RemoteViewModel) {
                 "PgUp" to Vk.PAGE_UP, "PgDn" to Vk.PAGE_DOWN,
             ) + (1..12).map { "F$it" to Vk.f(it) }
             keys.forEach { (label, vk) ->
-                OutlinedButton(onClick = { press(vk) }, modifier = Modifier.width(if (label.length > 3) 72.dp else 56.dp)) { Text(label) }
+                OutlineButton(onClick = { press(vk) }, modifier = Modifier.width(if (label.length > 3) 72.dp else 56.dp)) { Text(label) }
             }
         }
         OutlinedTextField(

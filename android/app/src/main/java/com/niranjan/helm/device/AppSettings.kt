@@ -5,7 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class ThemeMode { DARK, AMOLED }
+/** DARK = blueprint, LIGHT = whiteprint, AMOLED = deep (black paper). */
+enum class ThemeMode { DARK, LIGHT, AMOLED }
 
 data class Settings(
     val keepScreenOnInDock: Boolean = true,

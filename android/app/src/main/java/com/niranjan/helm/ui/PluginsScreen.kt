@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,7 +34,7 @@ fun PluginsScreen(vm: ExtrasViewModel) {
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             HintText("Plugins run sandboxed on the PC and only get the capabilities you grant.", Modifier.weight(1f))
-            OutlinedButton(onClick = vm::loadPlugins) { Text("Refresh") }
+            OutlineButton(onClick = vm::loadPlugins) { Text("Refresh") }
         }
         Spacer(Modifier.padding(4.dp))
         when {
@@ -61,7 +60,7 @@ fun PluginsScreen(vm: ExtrasViewModel) {
 
 @Composable
 private fun PluginCard(p: PluginInfo, onEnabled: (Boolean) -> Unit, onGrant: (String, Boolean) -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
+    BpCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

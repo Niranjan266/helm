@@ -1,36 +1,27 @@
 package com.niranjan.helm.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,81 +30,137 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.niranjan.helm.core.DiscoveredHost
 import com.niranjan.helm.core.SavedPc
+import com.niranjan.helm.device.Settings
+import com.niranjan.helm.device.ThemeMode
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Sheet 01: your PCs (the most recent one as a big FIG. panel), nearby PCs, pairing. */
 @Composable
 fun HomeScreen(
     saved: List<SavedPc>,
     discovered: Map<String, DiscoveredHost>,
+    connectingTo: String?,
     snackbar: SnackbarHostState,
-    onConnect: (SavedPc) -> Unit,
+    settings: Settings,
+    onSettings: ((Settings) -> Settings) -> Unit,
+    onConnect: (SavedPc, Screen) -> Unit,
     onForgetLocal: (SavedPc) -> Unit,
     onWake: (SavedPc) -> Unit,
     onScan: () -> Unit,
     onPaste: (String) -> String?,
 ) {
+    val c = Bp.c
     var nearbyInfo by remember { mutableStateOf<DiscoveredHost?>(null) }
     var showPaste by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     var removeTarget by remember { mutableStateOf<SavedPc?>(null) }
 
     val savedIds = saved.map { it.hostId.lowercase() }.toSet()
     val nearby = discovered.values.filter { it.hostId !in savedIds }.sortedBy { it.name.lowercase() }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Helm") }) },
+        containerColor = Color.Transparent,
+        contentColor = c.ink,
+        modifier = Modifier.gridPaper(c),
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Button(onClick = onScan, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                    Text("Pair with QR", style = MaterialTheme.typography.titleMedium)
-                }
-                TextButton(onClick = { showPaste = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Paste pairing link")
-                }
-            }
-        },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 18.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item { SectionTitle("Your PCs") }
-            if (saved.isEmpty()) {
-                item { Hint("No paired PCs yet. Run Helm on your PC and scan its QR code.") }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                HelmMark(size = 28.dp)
+                Text("Helm", style = BpType.title.copy(fontWeight = FontWeight.Black, fontSize = 20.sp), color = c.ink, modifier = Modifier.weight(1f))
+                OutlineButton(onClick = { showSettings = true }, textStyle = BpType.monoStrong) { Text("SETTINGS") }
             }
-            items(saved, key = { "s-" + it.hostId }) { pc ->
-                val online = discovered.containsKey(pc.hostId.lowercase())
-                PcCard(
-                    title = pc.name,
-                    subtitle = (discovered[pc.hostId.lowercase()]?.address ?: pc.lastAddress ?: pc.addresses.first()) +
-                        if (online) " · online" else "",
-                    online = online,
-                    onClick = { onConnect(pc) },
-                    onLongClick = { removeTarget = pc },
-                    onWake = if (!online && pc.macs.isNotEmpty()) ({ onWake(pc) }) else null,
+            SheetStrip("Sheet 01 · Your PCs", right = "Auto-reconnect on")
+
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Text(
+                    buildAnnotatedString {
+                        append("YOUR ")
+                        withStyle(SpanStyle(color = c.pencilInk)) { append("PCS") }
+                    },
+                    style = BpType.display,
+                    color = c.ink,
                 )
-            }
-            item { Spacer(Modifier.height(8.dp)); SectionTitle("Nearby PCs") }
-            if (nearby.isEmpty()) {
-                item { Hint("Looking for PCs running Helm on this Wi-Fi…") }
-            }
-            items(nearby, key = { "n-" + it.hostId }) { host ->
-                PcCard(
-                    title = host.name,
-                    subtitle = "${host.address} · not paired",
-                    online = true,
-                    onClick = { nearbyInfo = host },
-                    onLongClick = null,
-                    onWake = null,
+                if (saved.isEmpty()) {
+                    HintText("No paired PCs yet. Run Helm on your PC and scan its QR code.")
+                }
+                saved.firstOrNull()?.let { pc ->
+                    MainPcPanel(
+                        pc = pc,
+                        found = discovered[pc.hostId.lowercase()],
+                        connecting = connectingTo.equals(pc.hostId, ignoreCase = true),
+                        onOpen = { target -> onConnect(pc, target) },
+                        onLongPress = { removeTarget = pc },
+                        onWake = { onWake(pc) },
+                    )
+                }
+                saved.drop(1).forEach { pc ->
+                    val found = discovered[pc.hostId.lowercase()]
+                    val connecting = connectingTo.equals(pc.hostId, ignoreCase = true)
+                    PcRow(
+                        title = pc.name,
+                        status = when {
+                            connecting -> "Connecting…"
+                            found != null -> "Online · ${found.address}"
+                            else -> "Searching the network…"
+                        },
+                        statusColor = if (found != null && !connecting) c.ok else c.ink2,
+                        action = if (found == null && pc.macs.isNotEmpty()) "Wake" else "Connect",
+                        onAction = { if (found == null && pc.macs.isNotEmpty()) onWake(pc) else onConnect(pc, Screen.DOCK) },
+                        onClick = { onConnect(pc, Screen.DOCK) },
+                        onLongClick = { removeTarget = pc },
+                    )
+                }
+                if (nearby.isNotEmpty()) {
+                    MonoLabel("Nearby · not paired", color = c.ink)
+                    nearby.forEach { host ->
+                        PcRow(
+                            title = host.name,
+                            status = "${host.address} · not paired",
+                            statusColor = c.ink2,
+                            action = "Pair",
+                            onAction = { nearbyInfo = host },
+                            onClick = { nearbyInfo = host },
+                            onLongClick = null,
+                        )
+                    }
+                } else if (saved.isEmpty()) {
+                    MonoLabel("Looking for PCs running Helm on this Wi-Fi…")
+                }
+                Speech(
+                    if (saved.isEmpty()) "Open Helm on your PC and choose Pair a phone. I'll do the rest."
+                    else "Lost Wi-Fi? I'll find your PC again by itself.",
                 )
+                if (saved.isNotEmpty()) MonoLabel("Tip: long-press a PC to remove it from this phone.")
             }
-            item {
-                Hint("Tip: long-press a paired PC to remove it from this phone.")
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                PencilButton(
+                    onClick = onScan,
+                    shadow = 5.dp,
+                    textStyle = BpType.button.copy(fontWeight = FontWeight.Black, fontSize = 17.sp),
+                    modifier = Modifier.fillMaxWidth().height(63.dp),
+                ) { Text("PAIR WITH QR") }
+                TextButton(onClick = { showPaste = true }) {
+                    MonoLabel("Paste pairing link", color = c.pencilInk, strong = true)
+                }
             }
         }
     }
@@ -139,6 +186,25 @@ fun HomeScreen(
                 TextButton(onClick = { onForgetLocal(pc); removeTarget = null }) { Text("Remove") }
             },
             dismissButton = { TextButton(onClick = { removeTarget = null }) { Text("Cancel") } },
+        )
+    }
+
+    if (showSettings) {
+        AlertDialog(
+            onDismissRequest = { showSettings = false },
+            title = { Text("This phone") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MonoLabel("Theme")
+                    ThemeChips(settings.theme) { t -> onSettings { it.copy(theme = t) } }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Haptic feedback", modifier = Modifier.weight(1f))
+                        Switch(checked = settings.haptics, onCheckedChange = { v -> onSettings { it.copy(haptics = v) } })
+                    }
+                    MonoLabel("More settings appear once a PC is connected.")
+                }
+            },
+            confirmButton = { TextButton(onClick = { showSettings = false }) { Text("Done") } },
         )
     }
 
@@ -173,61 +239,89 @@ fun HomeScreen(
     }
 }
 
+/** Blueprint / Whiteprint / Deep (AMOLED) theme picker. */
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-    )
+fun ThemeChips(current: ThemeMode, onPick: (ThemeMode) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(ThemeMode.DARK to "Blueprint", ThemeMode.LIGHT to "Whiteprint", ThemeMode.AMOLED to "Deep").forEach { (mode, label) ->
+            MonoChip(label, onClick = { onPick(mode) }, selected = current == mode)
+        }
+    }
 }
 
+/** FIG. 1: the PC used last, with big shortcuts straight into its main screens. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Hint(text: String) {
-    Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-private fun PcCard(
-    title: String,
-    subtitle: String,
-    online: Boolean,
-    onClick: () -> Unit,
-    onLongClick: (() -> Unit)?,
-    onWake: (() -> Unit)?,
+private fun MainPcPanel(
+    pc: SavedPc,
+    found: DiscoveredHost?,
+    connecting: Boolean,
+    onOpen: (Screen) -> Unit,
+    onLongPress: () -> Unit,
+    onWake: () -> Unit,
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .let {
-                    if (onLongClick != null) {
-                        it.then(
-                            Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
-                        )
+    val c = Bp.c
+    val (status, color) = when {
+        connecting -> "● Connecting…" to c.pencilInk
+        found != null -> "● Online · ${found.address}" to c.ok
+        else -> "○ Searching the network…" to c.ink2
+    }
+    FigBox(fig = "1", trailing = status, trailingColor = color, modifier = Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                pc.name.uppercase(),
+                style = BpType.title.copy(fontSize = 22.sp, lineHeight = 26.sp),
+                color = c.ink,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).combinedClickable(onClick = { onOpen(Screen.DOCK) }, onLongClick = onLongPress),
+            )
+            if (found == null && !connecting && pc.macs.isNotEmpty()) MonoChip("Wake", onClick = onWake)
+        }
+        val tiles = listOf(Screen.TOUCHPAD to "Touchpad", Screen.SCREEN to "Screen", Screen.MEDIA to "Media", Screen.DECK to "Deck")
+        tiles.chunked(2).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { (target, label) ->
+                    val m = Modifier.weight(1f).height(56.dp)
+                    if (target == Screen.TOUCHPAD) {
+                        PencilButton(onClick = { onOpen(target) }, modifier = m) { Text(label.uppercase()) }
                     } else {
-                        it.clickable(onClick = onClick)
+                        Box(m.padding(end = 3.dp, bottom = 3.dp)) {
+                            OutlineButton(onClick = { onOpen(target) }, modifier = Modifier.fillMaxSize()) { Text(label.uppercase()) }
+                        }
                     }
                 }
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(10.dp)
-                    .background(if (online) OnlineGreen else Color(0xFF5A616B), CircleShape),
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (onWake != null) TextButton(onClick = onWake) { Text("Wake") }
         }
+    }
+}
+
+/** A dashed row for another PC: name, mono status, one action. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PcRow(
+    title: String,
+    status: String,
+    statusColor: Color,
+    action: String,
+    onAction: () -> Unit,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
+) {
+    val c = Bp.c
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .dashedBorder(1.5.dp, c.ink.copy(alpha = 0.6f))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            MonoLabel(status, color = statusColor, maxLines = 1)
+        }
+        OutlineButton(onClick = onAction, textStyle = BpType.monoStrong) { Text(action.uppercase()) }
     }
 }

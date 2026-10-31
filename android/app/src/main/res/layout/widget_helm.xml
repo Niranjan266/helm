@@ -2,7 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#E6181A20"
+    android:background="#F00D3A86"
     android:orientation="vertical"
     android:padding="8dp">
 
@@ -13,7 +13,7 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:text="Helm"
-        android:textColor="#FFFFFF"
+        android:textColor="#EAF2FF"
         android:textSize="14sp" />
 
     <TextView
@@ -22,7 +22,7 @@
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textColor="#B0B4BE"
+        android:textColor="#9DB8E8"
         android:textSize="12sp" />
 
     <LinearLayout

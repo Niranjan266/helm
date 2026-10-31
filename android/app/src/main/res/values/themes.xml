@@ -6,6 +6,6 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
-    <color name="helm_background">#0F1216</color>
-    <color name="ic_launcher_background">#16263A</color>
+    <color name="helm_background">#0D3A86</color>
+    <color name="ic_launcher_background">#0D3A86</color>
 </resources>

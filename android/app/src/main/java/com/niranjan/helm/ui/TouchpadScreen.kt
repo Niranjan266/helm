@@ -64,6 +64,21 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niranjan.helm.core.KeyPress
 import com.niranjan.helm.core.MouseButton
@@ -81,7 +96,6 @@ import kotlinx.coroutines.isActive
 
 private enum class TwoFinger { NONE, SCROLL, PINCH }
 
-private val PadShape = RoundedCornerShape(20.dp)
 private val ControlGap = 8.dp
 
 private val Modifiers = listOf("Ctrl" to Vk.CONTROL, "Alt" to Vk.ALT, "Shift" to Vk.SHIFT, "Win" to Vk.LWIN)
@@ -180,7 +194,7 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
 
     // Orientation, not window size: the soft keyboard shrinks the window and must not flip the layout.
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    Box(Modifier.fillMaxSize().padding(12.dp)) {
+    Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
         if (landscape) {
             // Landscape: pad on the left, controls in a column on the right.
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -213,24 +227,19 @@ private fun PadToolbar(
     onSpeed: (Float) -> Unit,
     onSpeedDone: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ControlGap)) {
-            FilterChip(selected = dragLock, onClick = onDragLock, label = { Text("Drag lock") })
-            if (airMouse != null) {
-                FilterChip(selected = airMouse, onClick = onAirMouse, label = { Text("Air mouse") })
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ControlGap)) {
-            Text("Speed", style = MaterialTheme.typography.labelLarge)
-            Slider(
-                value = speed,
-                onValueChange = onSpeed,
-                onValueChangeFinished = onSpeedDone,
-                valueRange = 0.4f..3f,
-                modifier = Modifier.weight(1f),
-            )
-            Text("%.1f×".format(speed), style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(40.dp))
-        }
+    val c = Bp.c
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        MonoLabel("Speed")
+        DiamondSlider(
+            value = speed,
+            onValueChange = onSpeed,
+            onValueChangeFinished = onSpeedDone,
+            valueRange = 0.4f..3f,
+            modifier = Modifier.weight(1f),
+        )
+        Text("%.1f×".format(speed), style = BpType.monoStrong, color = c.ink, textAlign = TextAlign.End, modifier = Modifier.width(40.dp))
+        if (airMouse != null) MonoChip("Air mouse", onClick = onAirMouse, selected = airMouse, height = 36.dp)
+        MonoChip("Drag lock", onClick = onDragLock, selected = dragLock, height = 36.dp)
     }
 }
 
@@ -252,13 +261,16 @@ private fun TouchSurface(
     val slop = with(density) { 8.dp.toPx() }
     val notchPx = with(density) { 36.dp.toPx() }
     val pinchPx = with(density) { 60.dp.toPx() }
-    val glow = MaterialTheme.colorScheme.primary
-    val glowRadius = with(density) { 28.dp.toPx() }
+    val c = Bp.c
+    val ringRadius = with(density) { 30.dp.toPx() }
+    val dotRadius = with(density) { 9.dp.toPx() }
+    val ringStroke = with(density) { 1.5.dp.toPx() }
+    val ringDash = with(density) { floatArrayOf(5.dp.toPx(), 4.dp.toPx()) }
 
     Box(
         modifier
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, PadShape)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, PadShape)
+            .dotPaper(c)
+            .border(1.5.dp, c.ink)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
@@ -349,16 +361,25 @@ private fun TouchSurface(
             },
         contentAlignment = Alignment.Center,
     ) {
+        MonoLabel("Fig. 2 · Touch area", modifier = Modifier.align(Alignment.TopStart).padding(start = 10.dp, top = 8.dp))
         if (!used) {
-            HintText(
-                "Move with one finger · tap to click\nTwo fingers to scroll · two-finger tap for right-click · pinch to zoom",
+            Text(
+                "1 finger · move · tap = click\n2 fingers · scroll · pinch = zoom\n2-finger tap = right click".uppercase(),
+                style = BpType.mono.copy(lineHeight = 20.sp, letterSpacing = 0.06.em),
+                color = c.ink2,
+                textAlign = TextAlign.Center,
                 modifier = Modifier.padding(24.dp),
             )
         }
         Canvas(Modifier.fillMaxSize()) {
             touches.forEach { p ->
-                drawCircle(glow.copy(alpha = 0.18f), radius = glowRadius, center = p)
-                drawCircle(glow.copy(alpha = 0.35f), radius = glowRadius * 0.45f, center = p)
+                drawCircle(
+                    c.pencil,
+                    radius = ringRadius,
+                    center = p,
+                    style = Stroke(width = ringStroke, pathEffect = PathEffect.dashPathEffect(ringDash)),
+                )
+                drawCircle(c.pencil, radius = dotRadius, center = p)
             }
         }
     }
@@ -367,41 +388,35 @@ private fun TouchSurface(
 @Composable
 private fun ClickButtons(remote: RemoteViewModel) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ControlGap)) {
-        FilledTonalButton(
+        OutlineButton(
             onClick = { remote.click(MouseButton.LEFT) },
-            shape = RoundedCornerShape(topStart = 12.dp, bottomStart = 20.dp, topEnd = 6.dp, bottomEnd = 6.dp),
-            modifier = Modifier.weight(1f).height(52.dp),
-        ) { Text("Left click") }
-        FilledTonalButton(
+            filled = true,
+            modifier = Modifier.weight(1f).height(56.dp),
+        ) { Text("LEFT CLICK", style = BpType.button.copy(fontSize = 14.sp)) }
+        OutlineButton(
             onClick = { remote.click(MouseButton.RIGHT) },
-            shape = RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp, topEnd = 12.dp, bottomEnd = 20.dp),
-            modifier = Modifier.weight(1f).height(52.dp),
-        ) { Text("Right click") }
+            filled = true,
+            modifier = Modifier.weight(1f).height(56.dp),
+        ) { Text("RIGHT CLICK", style = BpType.button.copy(fontSize = 14.sp)) }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun KeyPanel(mods: SnapshotStateList<Int>, onKey: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // Modifiers stick until the next key, then clear.
-        KeyRow {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Modifiers.forEach { (label, vk) ->
-                FilterChip(
-                    selected = vk in mods,
-                    onClick = { if (vk in mods) mods.remove(vk) else mods.add(vk) },
-                    label = { Text(label) },
-                )
+                MonoChip(label, selected = vk in mods, onClick = { if (vk in mods) mods.remove(vk) else mods.add(vk) })
             }
+            CommonKeys.forEach { (label, vk) -> MonoChip(label, onClick = { onKey(vk) }) }
+            MonoChip(if (expanded) "Less" else "More", dashed = true, onClick = { expanded = !expanded })
         }
-        KeyRow { CommonKeys.forEach { (label, vk) -> KeyButton(label) { onKey(vk) } } }
         if (expanded) {
-            KeyRow { NavKeys.forEach { (label, vk) -> KeyButton(label) { onKey(vk) } } }
-            KeyRow { FunctionKeys.forEach { (label, vk) -> KeyButton(label) { onKey(vk) } } }
-        }
-        TextButton(onClick = { expanded = !expanded }) {
-            Icon(if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown, contentDescription = null)
-            Text(if (expanded) "Fewer keys" else "More keys (arrows, F1–F12)")
+            KeyRow { NavKeys.forEach { (label, vk) -> MonoChip(label, onClick = { onKey(vk) }) } }
+            KeyRow { FunctionKeys.forEach { (label, vk) -> MonoChip(label, onClick = { onKey(vk) }) } }
         }
     }
 }
@@ -416,16 +431,6 @@ private fun KeyRow(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun KeyButton(label: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 10.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.height(40.dp).width(if (label.length > 3) 64.dp else 48.dp),
-    ) { Text(label, style = MaterialTheme.typography.labelLarge) }
-}
-
-@Composable
 private fun TypeField(
     remote: RemoteViewModel,
     mods: SnapshotStateList<Int>,
@@ -433,35 +438,54 @@ private fun TypeField(
     onKey: (Int) -> Unit,
 ) {
     var text by remember { mutableStateOf("") }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { new ->
-            if (mods.isNotEmpty() && new.length == text.length + 1 && new.startsWith(text)) {
-                // A letter typed with sticky modifiers becomes a shortcut (e.g. Ctrl+C).
-                val vk = Vk.forChar(new.last())
-                if (vk != null) {
-                    onKey(vk)
-                    return@OutlinedTextField
+    val c = Bp.c
+    val sendEnter = {
+        onKey(Vk.RETURN)
+        text = ""
+    }
+    Row(
+        Modifier.fillMaxWidth().height(52.dp).background(c.panel).border(1.5.dp, c.ink).padding(start = 14.dp, end = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BasicTextField(
+            value = text,
+            onValueChange = { new ->
+                if (mods.isNotEmpty() && new.length == text.length + 1 && new.startsWith(text)) {
+                    // A letter typed with sticky modifiers becomes a shortcut (e.g. Ctrl+C).
+                    val vk = Vk.forChar(new.last())
+                    if (vk != null) {
+                        onKey(vk)
+                        return@BasicTextField
+                    }
                 }
-            }
-            remote.sendAll(TextDiff.frames(text, new))
-            // Keep the buffer short; reset silently.
-            text = if (new.length > 80) "" else new
-        },
-        placeholder = { Text("Type on the PC") },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp),
-        trailingIcon = {
-            IconButton(onClick = {
-                onKey(Vk.RETURN)
-                text = ""
-            }) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send Enter") }
-        },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Send, autoCorrectEnabled = false),
-        keyboardActions = KeyboardActions(onSend = {
-            onKey(Vk.RETURN)
-            text = ""
-        }),
-        modifier = Modifier.fillMaxWidth().focusRequester(focus),
-    )
+                remote.sendAll(TextDiff.frames(text, new))
+                // Keep the buffer short; reset silently.
+                text = if (new.length > 80) "" else new
+            },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.ink, fontSize = 15.sp),
+            cursorBrush = SolidColor(c.pencilInk),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Send, autoCorrectEnabled = false),
+            keyboardActions = KeyboardActions(onSend = { sendEnter() }),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (text.isEmpty()) Text("Type on the PC", style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp), color = c.ink2)
+                    inner()
+                }
+            },
+            modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = "Type on the PC" },
+        )
+        Box(
+            Modifier
+                .size(44.dp, 40.dp)
+                .background(c.pencil)
+                .border(2.dp, c.deep)
+                .clickable(role = Role.Button, onClick = sendEnter)
+                .semantics { contentDescription = "Send Enter" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = c.deep, modifier = Modifier.size(18.dp))
+        }
+    }
 }

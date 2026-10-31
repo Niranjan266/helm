@@ -16,11 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -63,8 +60,8 @@ fun FilesScreen(remote: RemoteViewModel) {
                 }
                 HintText("Files go to Downloads\\Helm on the PC, links open in its browser, text goes to its clipboard.")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = remote::sendPendingShare) { Text("Send to PC") }
-                    OutlinedButton(onClick = remote::discardPendingShare) { Text("Discard") }
+                    PencilButton(onClick = remote::sendPendingShare) { Text("Send to PC") }
+                    OutlineButton(onClick = remote::discardPendingShare) { Text("Discard") }
                 }
             }
         }
@@ -81,13 +78,13 @@ fun FilesScreen(remote: RemoteViewModel) {
         SectionCard("Send files") {
             HintText("Saved to Downloads\\Helm on the PC.")
             Spacer(Modifier.size(6.dp))
-            Button(onClick = { pick.launch(arrayOf("*/*")) }, enabled = ui.transfer == null) { Text("Pick files…") }
+            PencilButton(onClick = { pick.launch(arrayOf("*/*")) }, enabled = ui.transfer == null) { Text("Pick files…") }
         }
 
         SectionCard("Clipboard") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = remote::pushClipboard) { Text("Phone → PC") }
-                OutlinedButton(onClick = remote::pullClipboard) { Text("PC → phone") }
+                OutlineButton(onClick = remote::pushClipboard) { Text("Phone → PC") }
+                OutlineButton(onClick = remote::pullClipboard) { Text("PC → phone") }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Copy PC clipboard to the phone automatically while Helm is open", modifier = Modifier.weight(1f))
@@ -98,23 +95,23 @@ fun FilesScreen(remote: RemoteViewModel) {
         SectionCard("Open on PC") {
             OutlinedTextField(url, { url = it }, label = { Text("URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.size(6.dp))
-            Button(onClick = { remote.openOnPc(url) }, enabled = url.isNotBlank()) { Text("Open") }
+            PencilButton(onClick = { remote.openOnPc(url) }, enabled = url.isNotBlank()) { Text("Open") }
         }
 
         SectionCard("Screenshot") {
             val monitors = ui.monitors
             if (monitors.size > 1) {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = monitorIndex < 0, onClick = { monitorIndex = -1 }, label = { Text("Primary") })
+                    BpFilterChip(selected = monitorIndex < 0, onClick = { monitorIndex = -1 }, label = { Text("Primary") })
                     monitors.forEachIndexed { i, m ->
-                        FilterChip(selected = monitorIndex == i, onClick = { monitorIndex = i }, label = { Text(monitorName(m, i)) })
+                        BpFilterChip(selected = monitorIndex == i, onClick = { monitorIndex = i }, label = { Text(monitorName(m, i)) })
                     }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { remote.capture(monitors.getOrNull(monitorIndex)) }, enabled = !ui.capturing) { Text("Capture") }
+                PencilButton(onClick = { remote.capture(monitors.getOrNull(monitorIndex)) }, enabled = !ui.capturing) { Text("Capture") }
                 if (ui.capturing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                if (ui.screenshot != null) OutlinedButton(onClick = remote::saveScreenshot) { Text("Save to gallery") }
+                if (ui.screenshot != null) OutlineButton(onClick = remote::saveScreenshot) { Text("Save to gallery") }
             }
             ui.screenshot?.let { bmp ->
                 Spacer(Modifier.size(8.dp))
@@ -131,7 +128,7 @@ fun FilesScreen(remote: RemoteViewModel) {
             HintText("Full path on the PC, e.g. C:\\Users\\you\\Documents\\report.pdf. Saved to Downloads/Helm on this phone.")
             OutlinedTextField(path, { path = it }, label = { Text("Path") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.size(6.dp))
-            Button(onClick = { remote.download(path) }, enabled = path.isNotBlank() && ui.transfer == null) { Text("Download") }
+            PencilButton(onClick = { remote.download(path) }, enabled = path.isNotBlank() && ui.transfer == null) { Text("Download") }
         }
         Spacer(Modifier.width(1.dp))
     }

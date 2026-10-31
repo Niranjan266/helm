@@ -2,6 +2,23 @@ package com.niranjan.helm
 
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import com.niranjan.helm.core.Cancelable
+import com.niranjan.helm.core.DiscoveredHost
+import com.niranjan.helm.core.ReadyInfo
+import com.niranjan.helm.core.ReconnectAddress
+import com.niranjan.helm.core.ReconnectClock
+import com.niranjan.helm.core.ReconnectState
+import com.niranjan.helm.core.ReconnectTransport
+import com.niranjan.helm.core.Reconnector
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import com.niranjan.helm.core.ConnectionState
 import com.niranjan.helm.core.DeviceIdentity
 import com.niranjan.helm.core.DeviceSigner
@@ -63,6 +80,11 @@ data class Session(
     val isPairing: Boolean,
     /** Pinned certificate fingerprint (also used for the `/stream` socket). */
     val fingerprint: String,
+    /**
+     * Started by the app itself (auto-connect to the last PC on launch): the UI keeps showing
+     * the PC list until it is ready, and a failure quietly returns there.
+     */
+    val quiet: Boolean = false,
 )
 
 /** App-scoped holder: identity, stores, discovery and the current connection. */
@@ -89,7 +111,35 @@ class HelmController(context: Context) {
     private val _session = MutableStateFlow<Session?>(null)
     val session: StateFlow<Session?> = _session.asStateFlow()
 
+    private val main = Handler(Looper.getMainLooper())
+    private val connectivity = context.getSystemService(ConnectivityManager::class.java)
+
+    private val _reconnect = MutableStateFlow<ReconnectState>(ReconnectState.Idle)
+
+    /** Auto-reconnect state of the current PC (drives the "Reconnecting…" banner). */
+    val reconnect: StateFlow<ReconnectState> = _reconnect.asStateFlow()
+
+    private val reconnector = Reconnector(
+        clock = object : ReconnectClock {
+            override fun nowMs() = SystemClock.elapsedRealtime()
+            override fun schedule(delayMs: Long, task: () -> Unit): Cancelable {
+                val r = Runnable(task)
+                main.postDelayed(r, delayMs)
+                return Cancelable { main.removeCallbacks(r) }
+            }
+        },
+        transport = ReconnectTransport { hostId, id, preferred -> reconnectAttempt(hostId, id, preferred) },
+        onState = { st ->
+            _reconnect.value = st
+            updateDiscovery()
+        },
+    )
+
+    /** True while an activity is visible (discovery runs then, or while reconnecting). */
+    private var uiVisible = false
+
     init {
+        watchConnection()
         // Warm up the key off the main thread so the first handshake is quick.
         scope.launch(Dispatchers.IO) {
             try {
@@ -115,6 +165,7 @@ class HelmController(context: Context) {
             try {
                 val ready = withContext(Dispatchers.IO) { conn.connect() }
                 savedPcs.upsert(EndpointPlanner.savedFromPairing(uri, ready, System.currentTimeMillis()))
+                if (_session.value?.connection === conn) reconnector.online(uri.hostId)
                 updateName(conn, ready.hostName)
                 rememberMacs(conn, uri.hostId)
             } catch (_: HelmException) {
@@ -123,38 +174,59 @@ class HelmController(context: Context) {
         }
     }
 
-    fun connectSaved(pc: SavedPc) {
+    fun connectSaved(pc: SavedPc, quiet: Boolean = false) {
         closeCurrent()
-        val conn = HelmConnection(
-            hostId = pc.hostId,
-            fingerprint = pc.fingerprint,
-            endpoints = EndpointPlanner.forSaved(pc, discovery.find(pc.hostId)),
-            identity = identity(),
-            mode = HandshakeMode.Auth,
-            relay = EndpointPlanner.relayFor(pc),
-        )
-        _session.value = Session(pc.hostId, pc.name, conn, isPairing = false, fingerprint = pc.fingerprint)
+        val conn = authConnection(pc, discovery.find(pc.hostId))
+        _session.value = Session(pc.hostId, pc.name, conn, isPairing = false, fingerprint = pc.fingerprint, quiet = quiet)
         scope.launch {
             try {
                 val ready = withContext(Dispatchers.IO) { conn.connect() }
-                val current = savedPcs.get(pc.hostId) ?: pc
-                savedPcs.upsert(
-                    if (ready.viaRelay) {
-                        current.copy(name = ready.hostName.ifBlank { current.name }, lastUsedMs = System.currentTimeMillis())
-                    } else {
-                        current.copy(
-                            name = ready.hostName.ifBlank { current.name },
-                            lastAddress = ready.endpoint.host,
-                            lastPort = ready.endpoint.port,
-                            lastUsedMs = System.currentTimeMillis(),
-                        )
-                    },
-                )
+                if (_session.value?.connection !== conn) return@launch
+                rememberConnected(pc, ready)
+                _session.value?.let { if (it.connection === conn && it.quiet) _session.value = it.copy(quiet = false) }
+                reconnector.online(pc.hostId)
                 updateName(conn, ready.hostName)
                 rememberMacs(conn, pc.hostId)
             } catch (_: HelmException) {
+                // An app-started connect that fails just goes back to the PC list.
+                val s = _session.value
+                if (s != null && s.connection === conn && s.quiet) _session.value = null
             }
         }
+    }
+
+    /** On launch: connect to the most recently used PC, without leaving the PC list until ready. */
+    fun autoConnectLast() {
+        if (_session.value != null) return
+        val pc = savedPcs.pcs.value.firstOrNull() ?: return
+        connectSaved(pc, quiet = true)
+    }
+
+    private fun authConnection(pc: SavedPc, found: DiscoveredHost?) = HelmConnection(
+        hostId = pc.hostId,
+        fingerprint = pc.fingerprint,
+        endpoints = EndpointPlanner.forSaved(pc, found),
+        identity = identity(),
+        mode = HandshakeMode.Auth,
+        relay = EndpointPlanner.relayFor(pc),
+    )
+
+    /** Saves where the PC was reached (LAN address and port, unless it came via the relay). */
+    private fun rememberConnected(pc: SavedPc, ready: ReadyInfo) {
+        val current = savedPcs.get(pc.hostId) ?: pc
+        savedPcs.upsert(
+            if (ready.viaRelay) {
+                current.copy(name = ready.hostName.ifBlank { current.name }, lastUsedMs = System.currentTimeMillis())
+            } else {
+                current.copy(
+                    name = ready.hostName.ifBlank { current.name },
+                    lastAddress = ready.endpoint.host,
+                    lastPort = ready.endpoint.port,
+                    addresses = EndpointPlanner.withAddress(current, ready.endpoint),
+                    lastUsedMs = System.currentTimeMillis(),
+                )
+            },
+        )
     }
 
     /**
@@ -292,6 +364,7 @@ class HelmController(context: Context) {
                 e.code == LocalCodes.CONNECTION_LOST || e.code == LocalCodes.CLOSED
             }
         }
+        reconnector.forget(s.hostId)
         savedPcs.remove(s.hostId)
         disconnect()
         return revoked
@@ -319,11 +392,12 @@ class HelmController(context: Context) {
 
     /**
      * Reconnects the control socket of a saved PC after it dropped (e.g. a Wi-Fi change).
-     * Returns false when there is nothing to reconnect (no session, still connected, or a
-     * one-time pairing session).
+     * Returns false when there is nothing to reconnect (no session, still connected, a
+     * one-time pairing session, or auto-reconnect is already on it).
      */
     fun reconnectIfDropped(): Boolean {
         val s = _session.value ?: return false
+        if (reconnector.state.isReconnecting) return false
         val st = s.connection.state.value
         if (s.isPairing && s.connection.readyInfo == null) return false
         if (st !is ConnectionState.Failed && st !is ConnectionState.Closed) return false
@@ -332,12 +406,99 @@ class HelmController(context: Context) {
         return true
     }
 
-    fun forget(hostId: String) = savedPcs.remove(hostId)
+    /** Skip the wait: retry the reconnect now (the "Retry now" button). */
+    fun reconnectNow() = reconnector.foreground()
+
+    /** An activity became visible / hidden: runs discovery and nudges a pending reconnect. */
+    fun setUiVisible(visible: Boolean) {
+        uiVisible = visible
+        updateDiscovery()
+        if (visible) reconnector.foreground()
+    }
+
+    fun forget(hostId: String) {
+        reconnector.forget(hostId)
+        savedPcs.remove(hostId)
+    }
 
     fun disconnect() = closeCurrent()
 
     private fun closeCurrent() {
+        // Stop first: closing the socket must not look like a drop.
+        reconnector.stop()
         _session.value?.connection?.close()
         _session.value = null
+    }
+
+    // ---- Auto-reconnect ---------------------------------------------------------------
+
+    /** One reconnect attempt: a fresh `auth` connection replaces the dead one in the session. */
+    private fun reconnectAttempt(hostId: String, attemptId: Long, preferred: ReconnectAddress?) {
+        val s = _session.value
+        val pc = savedPcs.get(hostId)
+        if (s == null || pc == null || !s.hostId.equals(hostId, ignoreCase = true)) {
+            reconnector.stop()
+            return
+        }
+        val found = preferred?.let { DiscoveredHost(pc.hostId, pc.name, it.host, it.port, "") } ?: discovery.find(hostId)
+        val conn = authConnection(pc, found)
+        s.connection.close()
+        _session.value = s.copy(connection = conn, isPairing = false, fingerprint = pc.fingerprint, quiet = false)
+        scope.launch {
+            try {
+                val ready = withContext(Dispatchers.IO) { conn.connect() }
+                if (_session.value?.connection !== conn) {
+                    conn.close()
+                    return@launch
+                }
+                rememberConnected(pc, ready)
+                reconnector.attemptSucceeded(attemptId)
+                updateName(conn, ready.hostName)
+                rememberMacs(conn, pc.hostId)
+            } catch (e: HelmException) {
+                if (_session.value?.connection === conn) reconnector.attemptFailed(attemptId, e.code)
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun watchConnection() {
+        // A ready connection that fails or closes (not by us) is a drop.
+        scope.launch {
+            session
+                .flatMapLatest { s -> s?.connection?.state?.map { s to it } ?: flowOf(null) }
+                .collect { pair ->
+                    val (s, st) = pair ?: return@collect
+                    if (st is ConnectionState.Failed || st is ConnectionState.Closed) reconnector.dropped(s.hostId)
+                }
+        }
+        // A fresh mDNS result for the PC we are trying to get back: try it at once.
+        scope.launch {
+            var last: DiscoveredHost? = null
+            discovery.hosts.collect { hosts ->
+                val target = reconnector.target
+                val now = target?.let { hosts[it.lowercase()] }
+                val prev = last
+                last = now
+                if (target == null || now == null) return@collect
+                // Only a new or changed result counts (PC restarted, or got a new address).
+                if (prev == null || prev.address != now.address || prev.port != now.port) {
+                    reconnector.discovered(target, ReconnectAddress(now.address, now.port))
+                }
+            }
+        }
+        // Network back (Wi-Fi joined, mobile data, VPN): retry at once.
+        runCatching {
+            connectivity?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    main.post { reconnector.networkAvailable() }
+                }
+            })
+        }
+    }
+
+    /** mDNS runs while the app is visible, and in the background only while reconnecting. */
+    private fun updateDiscovery() {
+        if (uiVisible || reconnector.state.isReconnecting) discovery.start() else discovery.stop()
     }
 }

@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -68,7 +67,7 @@ fun NotifyMirrorSettings(settings: Settings, onSettings: ((Settings) -> Settings
             if (settings.mirrorNotifications) {
                 if (!access) {
                     Text("Helm needs notification access.", color = MaterialTheme.colorScheme.error)
-                    OutlinedButton(onClick = { context.startActivity(NotifyMirrorService.accessSettingsIntent()) }) { Text("Open notification access") }
+                    OutlineButton(onClick = { context.startActivity(NotifyMirrorService.accessSettingsIntent()) }) { Text("Open notification access") }
                 }
                 Text("${settings.mirrorApps.size} app(s) allowed", style = MaterialTheme.typography.labelLarge)
                 OutlinedTextField(filter, { filter = it }, label = { Text("Find app") }, singleLine = true, modifier = Modifier.fillMaxWidth())

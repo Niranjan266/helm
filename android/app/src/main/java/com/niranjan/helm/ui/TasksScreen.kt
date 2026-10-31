@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,7 +49,7 @@ fun TasksScreen(power: PowerViewModel) {
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(ui.processFilter, power::setProcessFilter, placeholder = { Text("Filter by name or pid") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ProcessSort.entries.forEach { s -> FilterChip(selected = ui.processSort == s, onClick = { power.setProcessSort(s) }, label = { Text(s.name.lowercase().replaceFirstChar { it.uppercase() }) }) }
+            ProcessSort.entries.forEach { s -> BpFilterChip(selected = ui.processSort == s, onClick = { power.setProcessSort(s) }, label = { Text(s.name.lowercase().replaceFirstChar { it.uppercase() }) }) }
         }
         val list = ui.processes
         if (list == null) HintText("Loading processes…")
@@ -124,7 +123,7 @@ fun MixerScreen(power: PowerViewModel) {
                         Text("${(s.level * 100).toInt()}%")
                         IconButton(onClick = { power.toggleSessionMute(s) }) { Text(if (s.muted) "🔇" else "🔊") }
                     }
-                    Slider(value = s.level, onValueChange = { power.setSessionLevel(s, it) }, enabled = !s.muted)
+                    DiamondSlider(value = s.level, onValueChange = { power.setSessionLevel(s, it) }, enabled = !s.muted)
                 }
             }
         }
