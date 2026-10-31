@@ -72,7 +72,9 @@ import com.niranjan.helm.core.TouchpadMath
 import com.niranjan.helm.core.Vk
 import com.niranjan.helm.device.GyroSensor
 import com.niranjan.helm.device.Settings
+import com.niranjan.helm.device.WifiLatencyLock
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -112,7 +114,14 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
     val rui by remote.ui.collectAsStateWithLifecycle()
     val showAirMouse = rui.phase4 && GyroSensor.available(context)
 
-    // One combined move/scroll frame per ~16 ms (about 60 Hz).
+    // Wi-Fi power-save adds delay between packets; keep the radio awake while the pad is open.
+    DisposableEffect(Unit) {
+        val wifi = WifiLatencyLock(context)
+        wifi.acquire()
+        onDispose { wifi.release() }
+    }
+
+    // Safety net: moves are sent as each touch event arrives; this catches anything left over.
     LaunchedEffect(Unit) {
         while (isActive) {
             delay(16)
@@ -262,6 +271,13 @@ private fun TouchSurface(
                     var centroidTravel = 0f
                     var spanTravel = 0f
                     var end = start
+                    // Movement inside the tap slop is held back (so a tap does not nudge the
+                    // cursor) and released in one piece once the finger clearly moves.
+                    var heldX = 0f
+                    var heldY = 0f
+                    // Smoothed finger speed (px/ms): raw per-event timing is noisy and made
+                    // the pointer boost jump between frames.
+                    var velocity = 0f
                     while (true) {
                         val event = awaitPointerEvent()
                         end = event.changes.maxOf { it.uptimeMillis }
@@ -273,10 +289,24 @@ private fun TouchSurface(
                         if (pressed.size == 1 && maxPointers == 1) {
                             val c = pressed[0]
                             val d = c.position - c.previousPosition
-                            moved += d.getDistance()
+                            val dist = d.getDistance()
+                            moved += dist
+                            val dt = (c.uptimeMillis - last).coerceAtLeast(1).toFloat()
+                            velocity = if (velocity == 0f) dist / dt else velocity * 0.6f + (dist / dt) * 0.4f
                             if (moved > slop) {
-                                val (dx, dy) = TouchpadMath.accelerate(d.x, d.y, (c.uptimeMillis - last).toFloat(), currentSpeed)
+                                val rx = d.x + heldX
+                                val ry = d.y + heldY
+                                heldX = 0f
+                                heldY = 0f
+                                val rd = hypot(rx, ry)
+                                // Feed the smoothed speed in as an equivalent time step.
+                                val dtEff = if (velocity > 0f) rd / velocity else dt
+                                val (dx, dy) = TouchpadMath.accelerate(rx, ry, dtEff, currentSpeed)
                                 remote.touchMove(dx, dy)
+                                remote.flushInput()
+                            } else {
+                                heldX += d.x
+                                heldY += d.y
                             }
                             last = c.uptimeMillis
                         } else if (pressed.size >= 2) {
@@ -297,6 +327,7 @@ private fun TouchSurface(
                                 TwoFinger.PINCH -> remote.touchScroll(0f, ds / pinchPx)
                                 TwoFinger.NONE -> Unit
                             }
+                            if (mode != TwoFinger.NONE) remote.flushInput()
                         }
                         event.changes.forEach { it.consume() }
                     }
