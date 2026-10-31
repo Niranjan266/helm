@@ -307,7 +307,10 @@ OBS uses obs-websocket v5 at `ws://127.0.0.1:4455` with password from `obs.json`
 | `triggers.get` / `triggers.set` | viewer / remote | `{triggers:[{id,when:{time:"HH:MM days"}|{app_start:exe}|{phone_connected:device_id?}|{wifi:ssid},action}]}` |
 | `ha.config.set` | admin | `{url,token}` (stored DPAPI-encrypted) → `{}`; `ha.states` (viewer) → `{states:[…]}`; deck action `{"ha":{"service":"light.toggle","entity_id":"…"}}` |
 
-Every `term.*` call and `ha.config.set` is written to `audit.log`. Android sends its own
+Clarifications: `pn` tilt is in degrees; the agent sends pen "leave" after 300 ms without `pn`
+frames. Toast body click → `notify.action{action_id:null}`; reply button id is `"reply"`.
+`plugins.set` returns the full list (entries add `running`, `error`). Plugins emit `plugin.event{id,name,data}`.
+Every `term.*` call and `ha.config.set` is written to `audit.log` (term.write logs byte counts only). Android sends its own
 notifications through `notify.push` only when the user enables "Mirror notifications" for an app.
 
 ## 14. Storage on the PC
