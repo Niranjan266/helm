@@ -62,6 +62,8 @@ and `pair-qr.svg` is written into the data folder (deleted again when the agent 
 - `dock.json`, `deck.json` — dock pages and deck buttons (written atomically, synced to all
   phones with `dock.changed` / `deck.changed`).
 - `icon-cache\` — app icon PNGs.
+- `alerts.json`, `profiles.json` — Phase 3 alert rules and profiles; `obs.json` (optional,
+  written by you) — OBS websocket password/port.
 
 Files sent from the phone go to `<Downloads>\Helm` (name made safe, never overwritten:
 `a (1).txt`). `file.download` (admin) only serves regular files under the user's profile
@@ -84,6 +86,37 @@ folder, never the Helm data folder, at most 4 GiB, SHA-256 announced first.
   `Config::power_dry_run`); power, cancel, uploads and downloads are written to `audit.log`.
 
 Never share or commit anything from this folder.
+
+## Phase 3 — power user (`features:["p1","p3"]`)
+
+PROTOCOL §11. OS calls go through new `Platform` methods (stats sampler, processes, audio
+sessions, mic mute, window move/snap, virtual desktops, fixed drives, clock, foreground
+watcher) backed by `helm-win-sysmon` and `helm-win-system`; tests use the fake only.
+
+- `p3.rs` — alert rules (`alerts.json`, edge-triggered `alert{id,firing,value}`), profiles
+  (`profiles.json`; the foreground watcher matches `match_exe` case-insensitively and
+  broadcasts `profile.active{id|null}`), per-session `stats.tick` streams, and a 1 s ticker
+  that evaluates alerts and sends `deck.state{id,on}` / `deck.widget{id,text}` on change
+  (everything is re-sent when a phone connects).
+- `modules/monitor.rs` (`stats.*`, `alerts.*`, `process.*`, `profiles.*`),
+  `modules/desktop.rs` (`audio.sessions`, `audio.session.set`, `windows.move/snap`,
+  `desktop.switch`), `modules/fs.rs` (`fs.*`), `modules/devices.rs` (+ `devices.set_tier`,
+  `audit.list`).
+- Deck: `macro` (≤ 50 expanded steps, nesting ≤ 4), `repeat{times,action}`, `remote`
+  (PowerPoint/browser = hotkeys: Right/Left/F5/Esc, Alt+Left/Right, Ctrl(+Shift)+Tab, F5;
+  OBS via `obs.rs`). Buttons may carry `state:{bind}` and `widget` (`action` stays required).
+- `obs.rs` — obs-websocket v5 client (Hello → Identify with
+  `base64(sha256(base64(sha256(password+salt))+challenge))` → Request). Needs `obs.json` in
+  the data folder: `{"password":"…","port":4455}` (host is always 127.0.0.1); without it OBS
+  actions fail with `bad_params` and nothing is contacted.
+
+Safety: `process.kill/priority` are admin-only, refuse pid 0, 4 and the agent itself, and
+refuse `realtime`. `fs.*` (admin) canonicalizes every path (no `..`, junctions resolved),
+allows only the profile folder and fixed drives, hides and refuses the Helm data folder,
+never deletes a root, and deletes only files and **empty** folders. `devices.set_tier`
+refuses the calling device's own tier and disconnects the changed device so it re-auths with
+the new tier. Kills, priorities, alert/tier changes and fs changes go to `audit.log`;
+`audit.list{limit≤1000}` returns the last lines.
 
 ## Firewall
 

@@ -50,7 +50,7 @@ pub fn hello(host_id: &str, host_name: &str, nonce: &str) -> Value {
 }
 
 /// Optional protocol features this agent speaks (sent in `hello`).
-pub const FEATURES: &[&str] = &["p1"];
+pub const FEATURES: &[&str] = &["p1", "p3"];
 
 pub fn event(name: &str, data: Value) -> Value {
     json!({"type": "event", "name": name, "data": data})
