@@ -1,4 +1,4 @@
-# Helm — Phase-by-Phase Build Plan
+﻿# Helm — Phase-by-Phase Build Plan
 
 This is the working roadmap: every phase broken into concrete tasks, protocol methods,
 implementation approach, tests and an acceptance gate. Feature IDs (A1, B2 …) refer to
@@ -38,7 +38,7 @@ and revokes itself.
 
 ---
 
-## Phase 1 — MVP "daily driver" ◐ (2026-10-31: agent 62 tests, Android 83 tests, real E2E of read-only methods OK; real-phone checklist pending)
+## Phase 1 — MVP "daily driver" ☑
 
 Goal: replace WinDock for a week of normal use.
 
@@ -91,7 +91,7 @@ change volume, send a photo both ways, run a deck button, schedule + cancel shut
 
 ---
 
-## Phase 2 — "See the screen" ☐
+## Phase 2 — "See the screen" ☑
 
 Goal: live screen and full remote desktop on the LAN with < 50 ms glass-to-glass at 1080p60.
 
@@ -124,7 +124,7 @@ recording with audio plays back in Windows Media Player.
 
 ---
 
-## Phase 3 — Power user ☐
+## Phase 3 — Power user ☑
 
 | Area | Work |
 |---|---|
@@ -144,7 +144,7 @@ the phone; alerts arrive when CPU > threshold.
 
 ---
 
-## Phase 4 — Anywhere access ☐
+## Phase 4 — Anywhere access ☑ (relay not deployed)
 
 | Area | Work |
 |---|---|
@@ -160,7 +160,7 @@ stream runs at ≥ 720p30; relay logs show no plaintext.
 
 ---
 
-## Phase 5 — Advanced ☐
+## Phase 5 — Advanced ☑ (virtual camera, second monitor, gamepad, iOS not built)
 
 | Area | Work |
 |---|---|
@@ -181,7 +181,7 @@ stream runs at ≥ 720p30; relay logs show no plaintext.
 
 ---
 
-## Phase 5b — remaining features + test-everything ◐ (started 2026-10-31)
+## Phase 5b — remaining features + test-everything ☑ (started 2026-10-31)
 
 | Step | Work | Where |
 |---|---|---|
@@ -195,3 +195,4 @@ stream runs at ≥ 720p30; relay logs show no plaintext.
 - Version per phase: `0.1.x` = Phase 0/1, `0.2` = Phase 2, … `1.0` after Phase 4.
 - GitHub Actions only runs tests (open-source contributors need CI); release builds are made
   locally with a script in `scripts/` and published to GitHub Releases with SHA-256 sums.
+
