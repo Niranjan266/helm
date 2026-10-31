@@ -15,6 +15,7 @@ object Features {
     const val P2 = "p2"
     const val P3 = "p3"
     const val P4 = "p4"
+    const val P5 = "p5"
 }
 
 private fun JsonObject.floats(k: String): List<Float> =

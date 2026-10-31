@@ -154,6 +154,9 @@ sealed interface DeckAction {
 
     /** Phase 3 app remote, e.g. `powerpoint.next` or `obs.scene:<name>`. */
     data class Remote(val command: String) : DeckAction
+
+    /** Phase 5 (§13): call a Home Assistant service, e.g. `light.toggle` on `light.desk`. */
+    data class Ha(val service: String, val entityId: String) : DeckAction
     data class Unknown(val raw: JsonElement) : DeckAction
 
     companion object {
@@ -161,6 +164,13 @@ sealed interface DeckAction {
 
         /** Kinds only a `p3` agent understands. */
         val P3_KINDS = listOf("macro", "repeat", "remote")
+
+        /** Kinds only a `p5` agent understands. */
+        val P5_KINDS = listOf("ha")
+        val HA_SERVICES = listOf(
+            "homeassistant.toggle", "light.toggle", "light.turn_on", "light.turn_off",
+            "switch.toggle", "switch.turn_on", "switch.turn_off", "scene.turn_on", "script.turn_on",
+        )
         val MEDIA_ACTIONS = listOf("toggle_play_pause", "play", "pause", "next", "previous", "stop")
         val REMOTE_COMMANDS = listOf(
             "powerpoint.next", "powerpoint.prev", "powerpoint.start", "powerpoint.end",
@@ -200,6 +210,11 @@ object DeckCodec {
             o.optDouble("volume_step")?.let { return DeckAction.VolumeStep(it) }
             o.optLong("delay_ms")?.let { return DeckAction.Delay(it) }
             o.optStr("remote")?.let { return DeckAction.Remote(it) }
+            (o["ha"] as? JsonObject)?.let { h ->
+                val svc = h.optStr("service")
+                val ent = h.optStr("entity_id")
+                if (svc != null && ent != null && h.size == 2) return DeckAction.Ha(svc, ent)
+            }
             // Macro / repeat are decoded only when every inner action is understood; otherwise
             // the whole action is kept raw so a save never rewrites what we cannot represent.
             (o["macro"] as? JsonArray)?.let { arr ->
@@ -224,6 +239,12 @@ object DeckCodec {
         is DeckAction.VolumeStep -> buildJsonObject { put("volume_step", a.step) }
         is DeckAction.Delay -> buildJsonObject { put("delay_ms", a.ms) }
         is DeckAction.Remote -> buildJsonObject { put("remote", a.command) }
+        is DeckAction.Ha -> buildJsonObject {
+            put("ha", buildJsonObject {
+                put("service", a.service)
+                put("entity_id", a.entityId)
+            })
+        }
         is DeckAction.Macro -> buildJsonObject {
             put("macro", buildJsonArray { a.steps.take(DeckAction.MAX_MACRO_STEPS).forEach { add(encodeAction(it)) } })
         }
@@ -239,6 +260,14 @@ object DeckCodec {
     /** True when [a] (or a step inside it) needs a `p3` agent. */
     fun needsPhase3(a: DeckAction): Boolean = when (a) {
         is DeckAction.Macro, is DeckAction.Repeat, is DeckAction.Remote -> true
+        else -> false
+    }
+
+    /** True when [a] (or a step inside it) needs a `p5` agent. */
+    fun needsPhase5(a: DeckAction): Boolean = when (a) {
+        is DeckAction.Ha -> true
+        is DeckAction.Macro -> a.steps.any { needsPhase5(it) }
+        is DeckAction.Repeat -> needsPhase5(a.action)
         else -> false
     }
 

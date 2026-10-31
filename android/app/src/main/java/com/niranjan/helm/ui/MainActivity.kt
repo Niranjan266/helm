@@ -34,6 +34,7 @@ class MainActivity : FragmentActivity() {
     private val vm: MainViewModel by viewModels()
     private val remote: RemoteViewModel by viewModels()
     private val power: PowerViewModel by viewModels()
+    private val extras: ExtrasViewModel by viewModels()
 
     /** Fingerprint / screen-lock check before admin actions (per-PC setting). */
     private val adminGate by lazy {
@@ -75,6 +76,7 @@ class MainActivity : FragmentActivity() {
                     launch { vm.messages.collect { snackbar.showSnackbar(it) } }
                     launch { remote.messages.collect { snackbar.showSnackbar(it) } }
                     launch { power.messages.collect { snackbar.showSnackbar(it) } }
+                    launch { extras.messages.collect { snackbar.showSnackbar(it) } }
                     navTo.collect { s ->
                         if (s != null) {
                             screen = s

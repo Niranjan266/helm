@@ -13,7 +13,13 @@ access levels + audit log, biometric check before admin actions, home-screen wid
 Settings tiles (lock PC, mute) and a persistent media notification. Phase 4 (§12, `p4`): relay
 fallback (pinned TLS inside the relay tunnel, never pairing), PC switcher with per-PC settings,
 wake via another awake PC (`wol.send`), gyro air mouse (`gy`) and a "USB"/"Relay" link badge.
-Every p3/p4 call is gated on the hello feature. The wire contract is
+Phase 5 (§13, `p5`): record start/stop and pen mode (`pn` from stylus pressure/tilt/hover/
+eraser, fingers ignored) on the Screen tab, a Terminal (ConPTY output in a small VT screen with
+colours, input line + special keys, resize on layout change; admin + biometric check),
+notification mirroring (NotificationListenerService, per-app allow-list in Settings, off by
+default; toast actions and RemoteInput replies come back via `notify.action`), Plugins (enable,
+grant capabilities), Triggers editor, and Home Assistant (connection, states, `ha` deck action).
+Every p3/p4/p5 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 
 ## Layout
@@ -41,6 +47,10 @@ app/src/main/java/com/niranjan/helm/
     Tunnel.kt           relay tunnel v1: connect URL, 64 KiB chunks, mux frame codec, close codes
     RelayTransport.kt   TunnelSocket (java.net.Socket over the relay WebSocket) + RelayTransport
     Phase4.kt           gyro air-mouse maths, USB tethering detection
+    Phase5Models.kt     recording, term events/keys/size, notify push/action + allow-list,
+                        plugins, triggers, Home Assistant states
+    TermScreen.kt       VT100/xterm screen model (SGR colours, cursor, erase, scrollback)
+    HelmApiP5.kt        feature-gated calls for every §13 method + pen tilt maths
   device/   Android pieces: Keystore signer, stores, NSD discovery, settings, icon disk cache,
             content-URI reading and gallery/Downloads saving, VideoDecoder (MediaCodec ->
             SurfaceView) and AudioPlayer (Opus MediaCodec -> low-latency AudioTrack)
@@ -90,6 +100,11 @@ adb shell am start -a android.intent.action.VIEW -d "'helm://pair?v=1&id=...&t=.
   macro/repeat/remote/state/widget codecs, alerts/process/profile/fs codecs, paths, gyro, USB.
 - `Phase3ConnectionTest` — every §11/§12 method against the FakeAgent (events included) and
   feature gating (`unsupported`, nothing sent).
+- `Phase5CodecTest` — VT screen (wrap, SGR, CUP/erase, split UTF-8, insert/delete, alt screen,
+  resize, scroll region), terminal keys/size, `pn` frames + tilt, notify JSON/allow-list,
+  plugins, triggers (unknown kept), HA states and the `ha` deck action.
+- `Phase5ConnectionTest` — every §13 method against the FakeAgent (term output/exit and
+  `notify.action` events included) and `p5` gating.
 - `RelayTunnelTest` — a fake relay (MockWebServer + mux framing) in front of a TLS FakeAgent:
   LAN-fail -> relay auth with real pinned TLS, 700 KB download through the tunnel, the relay
   sees no plaintext, pin mismatch, host offline (404), `/stream` over relay, pairing refused.

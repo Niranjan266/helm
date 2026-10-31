@@ -23,6 +23,10 @@ data class Settings(
     /** true = direct touch (tap where you see), false = trackpad. */
     val streamDirectTouch: Boolean = false,
     val streamShowStats: Boolean = false,
+    /** Phase 5: mirror this phone's notifications to the PC (off by default). */
+    val mirrorNotifications: Boolean = false,
+    /** Package names allowed to mirror; empty = none. */
+    val mirrorApps: Set<String> = emptySet(),
 )
 
 /** Phone-local preferences (not synced to the PC). */
@@ -42,6 +46,8 @@ class AppSettings(context: Context) {
         streamAudio = prefs.getBoolean("st_audio", true),
         streamDirectTouch = prefs.getBoolean("st_direct", false),
         streamShowStats = prefs.getBoolean("st_stats", false),
+        mirrorNotifications = prefs.getBoolean("nm_on", false),
+        mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -57,6 +63,8 @@ class AppSettings(context: Context) {
             .putBoolean("st_audio", s.streamAudio)
             .putBoolean("st_direct", s.streamDirectTouch)
             .putBoolean("st_stats", s.streamShowStats)
+            .putBoolean("nm_on", s.mirrorNotifications)
+            .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))
             .apply()
         _settings.value = s
     }

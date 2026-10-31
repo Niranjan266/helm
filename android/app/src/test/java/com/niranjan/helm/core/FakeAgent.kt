@@ -9,6 +9,7 @@ import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
@@ -119,6 +120,32 @@ class FakeAgent(
 
     /** `system.info.relay`, when set. */
     @Volatile var infoRelay: JsonObject? = null
+
+    // ---- Phase 5 (§13) -------------------------------------------------------------------
+
+    @Volatile var pluginsJson: JsonObject = buildJsonObject {
+        putJsonArray("plugins") {
+            addJsonObject {
+                put("id", "weather"); put("name", "Weather"); put("version", "1.2.0")
+                putJsonArray("capabilities") { add(JsonPrimitive("deck.action")); add(JsonPrimitive("http:api.example.com")) }
+                putJsonArray("granted") { add(JsonPrimitive("deck.action")) }
+                put("enabled", false)
+            }
+            addJsonObject {
+                put("id", "broken"); put("name", "Broken"); put("version", "0.1.0")
+                putJsonArray("capabilities") {}
+                putJsonArray("granted") {}
+                put("enabled", true)
+                put("error", "wasm trap")
+            }
+        }
+    }
+    @Volatile var triggersJson: JsonObject = buildJsonObject { putJsonArray("triggers") {} }
+    @Volatile var haConfig: Pair<String, String>? = null
+    @Volatile var recording = false
+
+    /** Bytes written to each open terminal (`term.write`), by term id. */
+    val termInput = ConcurrentHashMap<Long, java.io.ByteArrayOutputStream>()
 
     private val streamTokens = ConcurrentHashMap<String, Boolean>()
     private val streamSockets = CopyOnWriteArrayList<WebSocket>()
@@ -384,7 +411,7 @@ class FakeAgent(
                     streamCalls += msg.s("method")!!
                     ok(ws, id, JsonObject(emptyMap()))
                 }
-                in P3_METHODS -> {
+                in P3_METHODS, in P5_METHODS -> {
                     p3Calls += msg.s("method")!! to params
                     val r = phase3(ws, msg.s("method")!!, params)
                     if (r == null) reqError(ws, id, "bad_params", "bad params") else ok(ws, id, r)
@@ -499,8 +526,103 @@ class FakeAgent(
                     empty
                 }
                 "wol.send" -> if (p.s("mac")?.length == 17) empty else null
+                else -> phase5(ws, method, p)
+            }
+        }
+
+        /** Phase 5 methods (§13); null = `bad_params`. */
+        private fun phase5(ws: WebSocket, method: String, p: JsonObject): JsonObject? {
+            val empty = JsonObject(emptyMap())
+            fun num(k: String) = (p[k] as? JsonPrimitive)?.longOrNull
+            fun later(ms: Long, body: () -> Unit) = Thread { Thread.sleep(ms); body() }.start()
+            return when (method) {
+                "record.start" -> {
+                    if (recording || p["audio"] == null) return null
+                    recording = true
+                    buildJsonObject { put("path", REC_PATH) }
+                }
+                "record.stop" -> {
+                    if (!recording) return null
+                    recording = false
+                    buildJsonObject { put("path", REC_PATH); put("duration_ms", 4200) }
+                }
+                "term.open" -> {
+                    if (p.s("shell") !in listOf("powershell", "cmd") || num("cols") == null || num("rows") == null) return null
+                    val tid = 7L + termInput.size
+                    termInput[tid] = java.io.ByteArrayOutputStream()
+                    later(50) { termOut(ws, tid, PROMPT) }
+                    buildJsonObject { put("term_id", tid) }
+                }
+                "term.write" -> {
+                    val tid = num("term_id") ?: return null
+                    val buf = termInput[tid] ?: return null
+                    val data = Base64.getDecoder().decode(p.s("data_b64") ?: return null)
+                    buf.write(data)
+                    later(20) { termOut(ws, tid, String(data, Charsets.UTF_8)) }
+                    empty
+                }
+                "term.resize" -> if (num("term_id")?.let { termInput[it] } != null && num("cols") != null && num("rows") != null) empty else null
+                "term.close" -> {
+                    val tid = num("term_id") ?: return null
+                    termInput.remove(tid) ?: return null
+                    later(20) { event(ws, "term.exit", buildJsonObject { put("term_id", tid); put("code", 0) }) }
+                    empty
+                }
+                "notify.push" -> {
+                    val key = p.s("key") ?: return null
+                    if (p.s("app") == null || p.s("title") == null || p["actions"] == null) return null
+                    if ((p["reply"] as? JsonPrimitive)?.content == "true") {
+                        later(50) {
+                            event(ws, "notify.action", buildJsonObject { put("key", key); put("action_id", "reply"); put("reply_text", "on my way") })
+                        }
+                    }
+                    empty
+                }
+                "plugins.list" -> pluginsJson
+                "plugins.set" -> {
+                    val pid = p.s("id") ?: return null
+                    val granted = p["granted"] as? JsonArray ?: return null
+                    val enabled = p["enabled"] ?: return null
+                    val list = (pluginsJson["plugins"] as JsonArray).map { o ->
+                        val obj = o as JsonObject
+                        if (obj.s("id") != pid) obj else JsonObject(obj + mapOf("granted" to granted, "enabled" to enabled))
+                    }
+                    pluginsJson = JsonObject(mapOf("plugins" to JsonArray(list)))
+                    empty
+                }
+                "triggers.get" -> triggersJson
+                "triggers.set" -> {
+                    triggersJson = buildJsonObject { put("triggers", p["triggers"] ?: return null) }
+                    empty
+                }
+                "ha.config.set" -> {
+                    haConfig = (p.s("url") ?: return null) to (p.s("token") ?: return null)
+                    empty
+                }
+                "ha.states" -> {
+                    if (haConfig == null) return null
+                    buildJsonObject {
+                        putJsonArray("states") {
+                            addJsonObject {
+                                put("entity_id", "switch.fan"); put("state", "off")
+                                putJsonObject("attributes") {}
+                            }
+                            addJsonObject {
+                                put("entity_id", "light.desk"); put("state", "on"); put("last_changed", "2026-10-31T10:00:00Z")
+                                putJsonObject("attributes") { put("friendly_name", "Desk lamp"); put("brightness", 200) }
+                            }
+                        }
+                    }
+                }
                 else -> null
             }
+        }
+
+        private fun termOut(ws: WebSocket, tid: Long, text: String) {
+            event(ws, "term.output", buildJsonObject {
+                put("term_id", tid)
+                put("data_b64", java.util.Base64.getEncoder().encodeToString(text.toByteArray(Charsets.UTF_8)))
+            })
         }
 
         private fun reqError(ws: WebSocket, id: Long, code: String, message: String) {
@@ -546,6 +668,14 @@ class FakeAgent(
             "process.priority", "audio.sessions", "audio.session.set", "windows.move", "windows.snap",
             "desktop.switch", "profiles.get", "profiles.set", "fs.list", "fs.delete", "fs.mkdir", "fs.open",
             "devices.set_tier", "audit.list", "relay.get", "relay.set", "wol.send",
+        )
+
+        const val REC_PATH = "C:\\Users\\test\\Videos\\Helm\\rec-1.mp4"
+        const val PROMPT = "\u001b[32mPS\u001b[0m C:\\> "
+
+        val P5_METHODS = setOf(
+            "record.start", "record.stop", "term.open", "term.write", "term.resize", "term.close", "notify.push",
+            "plugins.list", "plugins.set", "triggers.get", "triggers.set", "ha.config.set", "ha.states",
         )
 
         /** A `helm-win-sysmon` `Stats` snapshot. */
