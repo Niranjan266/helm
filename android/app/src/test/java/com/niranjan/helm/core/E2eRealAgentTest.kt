@@ -71,6 +71,43 @@ class E2eRealAgentTest {
         assertTrue("our device must be listed", me != null)
         assertEquals(true, (me!!["this"] as? JsonPrimitive)?.booleanOrNull)
 
+        // 4b. Phase 1 read-only methods (nothing with side effects).
+        log("features: ${ready2.features}")
+        if (authConn.supportsPhase1) {
+            val api = HelmApi(authConn)
+            suspend fun <T> timed(name: String, block: suspend () -> T): T {
+                val t = System.nanoTime()
+                val r = try {
+                    block()
+                } catch (e: HelmException) {
+                    throw AssertionError("$name failed: ${e.code}: ${e.message}", e)
+                }
+                log("$name: ${(System.nanoTime() - t) / 1_000_000} ms")
+                return r
+            }
+            val apps = timed("apps.list") { api.apps() }
+            log("  ${apps.size} apps, e.g. ${apps.take(3).map { it.name }}")
+            assertTrue("apps.list should not be empty on a real PC", apps.isNotEmpty())
+            val windows = timed("windows.list") { api.windows() }
+            log("  ${windows.size} windows, foreground: ${windows.firstOrNull { it.isForeground }?.title}")
+            val media = timed("media.state") { api.mediaState() }
+            log("  media: ${media?.let { "${it.status} '${it.title}' by '${it.artist}'" } ?: "nothing playing"}")
+            val audio = timed("audio.get") { api.audio() }
+            log("  audio: $audio")
+            assertTrue("audio.get must return level", audio != null)
+            val dock = timed("dock.get") { api.dock() }
+            log("  dock: ${dock.size} pages, ${dock.sumOf { it.size }} tiles")
+            val deck = timed("deck.get") { api.deck() }
+            log("  deck: ${deck.size} buttons")
+            val monitors = timed("screen.monitors") { api.monitors() }
+            log("  monitors: ${monitors.map { "${it.name} ${it.width}x${it.height}${if (it.isPrimary) " (primary)" else ""}" }}")
+            assertTrue("screen.monitors should list a monitor", monitors.isNotEmpty())
+            val macs = MacEntry.listFrom(timed("system.info") { api.systemInfo() })
+            log("  macs: $macs -> wake order ${WakeOnLan.chooseMacs(macs)}")
+        } else {
+            log("agent does not advertise p1; skipping Phase 1 read-only checks")
+        }
+
         // 5. Revoke ourselves ("forget this PC").
         val revoked = authConn.request("devices.revoke", buildJsonObject { put("device_id", identity.deviceId) })
         log("devices.revoke: $revoked")

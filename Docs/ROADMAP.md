@@ -38,7 +38,7 @@ and revokes itself.
 
 ---
 
-## Phase 1 — MVP "daily driver" ☐
+## Phase 1 — MVP "daily driver" ◐ (2026-10-31: agent 62 tests, Android 83 tests, real E2E of read-only methods OK; real-phone checklist pending)
 
 Goal: replace WinDock for a week of normal use.
 

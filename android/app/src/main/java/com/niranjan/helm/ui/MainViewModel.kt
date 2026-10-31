@@ -113,6 +113,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun forgetLocally(hostId: String) = controller.forget(hostId)
 
+    val settings = controller.settings.settings
+
+    fun updateSettings(change: (com.niranjan.helm.device.Settings) -> com.niranjan.helm.device.Settings) =
+        controller.settings.update(change)
+
+    /** Wake-on-LAN for an offline saved PC. */
+    fun wake(pc: SavedPc) {
+        if (pc.macs.isEmpty()) {
+            message("No network address known for ${pc.name} yet. Connect once while it is on.")
+            return
+        }
+        viewModelScope.launch {
+            val n = try {
+                controller.wake(pc)
+            } catch (e: Exception) {
+                message("Wake failed: ${e.message}")
+                return@launch
+            }
+            message(if (n > 0) "Wake signal sent to ${pc.name}. It may take a minute to start." else "Could not send the wake signal.")
+        }
+    }
+
     fun ping() {
         val conn = controller.session.value?.connection ?: return
         _ui.value = _ui.value.copy(pingBusy = true)

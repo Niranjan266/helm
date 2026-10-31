@@ -52,6 +52,7 @@ fun HomeScreen(
     snackbar: SnackbarHostState,
     onConnect: (SavedPc) -> Unit,
     onForgetLocal: (SavedPc) -> Unit,
+    onWake: (SavedPc) -> Unit,
     onScan: () -> Unit,
     onPaste: (String) -> String?,
 ) {
@@ -94,6 +95,7 @@ fun HomeScreen(
                     online = online,
                     onClick = { onConnect(pc) },
                     onLongClick = { removeTarget = pc },
+                    onWake = if (!online && pc.macs.isNotEmpty()) ({ onWake(pc) }) else null,
                 )
             }
             item { Spacer(Modifier.height(8.dp)); SectionTitle("Nearby PCs") }
@@ -107,6 +109,7 @@ fun HomeScreen(
                     online = true,
                     onClick = { nearbyInfo = host },
                     onLongClick = null,
+                    onWake = null,
                 )
             }
             item {
@@ -193,6 +196,7 @@ private fun PcCard(
     online: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
+    onWake: (() -> Unit)?,
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
@@ -219,10 +223,11 @@ private fun PcCard(
                     .background(if (online) OnlineGreen else Color(0xFF5A616B), CircleShape),
             )
             Spacer(Modifier.width(14.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            if (onWake != null) TextButton(onClick = onWake) { Text("Wake") }
         }
     }
 }

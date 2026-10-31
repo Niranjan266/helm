@@ -21,10 +21,13 @@ OPTIONS:
     --port <n>          TCP port (default 47820; 0 = any free port)
     --no-mdns           do not advertise on the local network
     --pair              show a pairing QR at start even if devices are paired
+    --no-tray           console only: no notification-area icon
+    --background        no console window (tray only; used by Start with Windows)
     -h, --help          show this help
     -V, --version       show the version
 
-While running, type  p + Enter  for a fresh pairing QR,  q + Enter  to quit.";
+While running, type  p + Enter  for a fresh pairing QR,  q + Enter  to quit.
+The tray icon menu offers the same (plus Paired devices and Start with Windows).";
 
 enum Command {
     Run,
@@ -38,6 +41,8 @@ struct Args {
     port: u16,
     mdns: bool,
     pair: bool,
+    tray: bool,
+    background: bool,
 }
 
 fn parse_args() -> anyhow::Result<Option<Args>> {
@@ -47,6 +52,8 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
         port: helm_agent::DEFAULT_PORT,
         mdns: true,
         pair: false,
+        tray: cfg!(windows),
+        background: false,
     };
     let mut positional: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
@@ -69,9 +76,14 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
             }
             "--no-mdns" => args.mdns = false,
             "--pair" => args.pair = true,
+            "--no-tray" => args.tray = false,
+            "--background" => args.background = true,
             other if other.starts_with('-') => bail!("unknown option {other}\n\n{USAGE}"),
             other => positional.push(other.to_string()),
         }
+    }
+    if args.background && !args.tray {
+        bail!("--background needs the tray icon (drop --no-tray)");
     }
     args.command = match positional.as_slice() {
         [] => Command::Run,
@@ -124,7 +136,8 @@ fn revoke_device(args: &Args, device_id: &str) -> anyhow::Result<()> {
     }
 }
 
-fn show_pairing(server: &ServerHandle) {
+/// Writes a fresh pairing QR and returns the path of `pair-qr.svg`.
+fn show_pairing(server: &ServerHandle) -> std::path::PathBuf {
     let pairing = server.new_pairing();
     let svg_path = server.data_dir().join("pair-qr.svg");
     match qr::to_unicode(&pairing.uri) {
@@ -147,6 +160,47 @@ fn show_pairing(server: &ServerHandle) {
     println!(
         "Scan it with the Helm app. Valid for {minutes} min, one use. Type p + Enter for a new one.\n"
     );
+    svg_path
+}
+
+/// Open a file or folder with its default app (browser for the QR SVG, Explorer for folders).
+async fn open_with_shell(path: std::path::PathBuf) {
+    let shown = path.display().to_string();
+    let r =
+        tokio::task::spawn_blocking(move || helm_win_apps::open_target(&path.to_string_lossy()))
+            .await;
+    if !matches!(r, Ok(Ok(()))) {
+        eprintln!("could not open {shown}");
+    }
+}
+
+#[cfg(windows)]
+type TrayHandle = helm_agent::tray::Tray;
+#[cfg(not(windows))]
+type TrayHandle = ();
+#[cfg(not(windows))]
+enum NoTrayCommand {}
+
+#[cfg(windows)]
+fn start_tray(
+    tx: tokio::sync::mpsc::UnboundedSender<helm_agent::tray::TrayCommand>,
+) -> Option<TrayHandle> {
+    match helm_agent::tray::Tray::start(tx) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            eprintln!("tray icon unavailable ({e:#}); console mode only");
+            None
+        }
+    }
+}
+
+#[cfg(windows)]
+fn toggle_autostart() {
+    let want = !helm_agent::tray::autostart_enabled();
+    match helm_agent::tray::set_autostart(want) {
+        Ok(()) => println!("Start with Windows: {}", if want { "on" } else { "off" }),
+        Err(e) => eprintln!("could not change Start with Windows: {e:#}"),
+    }
 }
 
 async fn run(args: Args) -> anyhow::Result<()> {
@@ -178,7 +232,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
         if paired == 0 {
             println!("\nNo devices paired yet.");
         }
-        show_pairing(&server);
+        let svg = show_pairing(&server);
+        if args.background {
+            open_with_shell(svg).await;
+        }
     } else {
         println!("\n{paired} paired device(s). Type p + Enter to pair another phone.\n");
     }
@@ -201,22 +258,54 @@ async fn run(args: Args) -> anyhow::Result<()> {
         }
     });
 
+    #[cfg(windows)]
+    let (tray_tx, mut tray_rx) = tokio::sync::mpsc::unbounded_channel();
+    #[cfg(not(windows))]
+    let (_tray_tx, mut tray_rx) = tokio::sync::mpsc::unbounded_channel::<NoTrayCommand>();
+    #[cfg(windows)]
+    let tray: Option<TrayHandle> = if args.tray { start_tray(tray_tx) } else { None };
+    #[cfg(not(windows))]
+    let tray: Option<TrayHandle> = None;
+    if args.background && tray.is_none() {
+        bail!("--background needs the tray icon, which could not be created");
+    }
+
+    let mut stdin_open = true;
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
-            line = line_rx.recv() => match line.as_deref() {
-                Some("p") | Some("pair") => show_pairing(&server),
+            line = line_rx.recv(), if stdin_open => match line.as_deref() {
+                Some("p") | Some("pair") => {
+                    show_pairing(&server);
+                }
                 Some("q") | Some("quit") | Some("exit") => break,
                 Some("") => {}
                 Some(other) => println!("unknown command {other:?} (p = pair, q = quit)"),
-                // stdin closed (e.g. running without a console): keep serving until Ctrl+C.
-                None => {
-                    let _ = tokio::signal::ctrl_c().await;
-                    break;
+                // stdin closed (no console): keep serving until Ctrl+C or tray Quit.
+                None => stdin_open = false,
+            },
+            Some(cmd) = tray_rx.recv() => {
+                #[cfg(windows)]
+                {
+                    use helm_agent::tray::TrayCommand;
+                    match cmd {
+                        TrayCommand::ShowPairing => {
+                            let svg = show_pairing(&server);
+                            open_with_shell(svg).await;
+                        }
+                        TrayCommand::PairedDevices => {
+                            open_with_shell(server.data_dir().to_path_buf()).await;
+                        }
+                        TrayCommand::ToggleAutostart => toggle_autostart(),
+                        TrayCommand::Quit => break,
+                    }
                 }
+                #[cfg(not(windows))]
+                let _ = cmd;
             }
         }
     }
+    drop(tray);
 
     println!("Stopping…");
     let svg_path = server.data_dir().join("pair-qr.svg");
@@ -234,6 +323,14 @@ fn main() -> anyhow::Result<()> {
         Command::Devices => return list_devices(&args),
         Command::Revoke(id) => return revoke_device(&args, id),
         Command::Run => {}
+    }
+    #[cfg(windows)]
+    if args.background {
+        // Started by "Start with Windows": no console window, the tray is the UI.
+        // SAFETY: detaching from our own console has no preconditions.
+        unsafe {
+            let _ = windows::Win32::System::Console::FreeConsole();
+        }
     }
     tracing_subscriber::fmt()
         .with_env_filter(

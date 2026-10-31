@@ -23,14 +23,19 @@ use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
+use helm_win_system::power::{DryRunBackend, PowerBackend, PowerScheduler, SystemPowerBackend};
+
 use crate::audit::AuditLog;
 use crate::devices::{Device, DeviceStore};
 use crate::identity::{self, Identity};
 use crate::mdns::Advertiser;
 use crate::pairing::{self, Pairing, PairingState, TokenCheck};
+use crate::platform::{Platform, PlatformEvent, WatchGuard, real::RealPlatform};
 use crate::proto::{self, Handshake, codes};
 use crate::router::{RequestContext, Router, Tier};
-use crate::{modules, net, util};
+use crate::session::{Outgoing, Session};
+use crate::store::LayoutStore;
+use crate::{files, modules, net, paths, util};
 
 pub const DEFAULT_PORT: u16 = 47820;
 pub const WS_PATH: &str = "/ws";
@@ -51,6 +56,16 @@ pub struct Config {
     pub host_name: Option<String>,
     /// Override the addresses put in the pairing link / mDNS (defaults to LAN IPv4s).
     pub addresses: Option<Vec<Ipv4Addr>>,
+    /// What the agent controls. `None` = this PC. Tests pass a fake.
+    pub platform: Option<Arc<dyn Platform>>,
+    /// Record power actions instead of performing them (tests).
+    pub power_dry_run: bool,
+    /// Where uploads are saved (default `<Downloads>\Helm`).
+    pub downloads_dir: Option<PathBuf>,
+    /// Only files under this folder can be downloaded (default: the user's profile folder).
+    pub download_root: Option<PathBuf>,
+    /// How often the window list is checked for `windows.changed` while phones are connected.
+    pub windows_poll: Duration,
 }
 
 impl Config {
@@ -64,6 +79,11 @@ impl Config {
             lockout: pairing::LOCKOUT,
             host_name: None,
             addresses: None,
+            platform: None,
+            power_dry_run: false,
+            downloads_dir: None,
+            download_root: None,
+            windows_poll: Duration::from_secs(2),
         }
     }
 }
@@ -76,16 +96,6 @@ pub fn default_data_dir() -> PathBuf {
     }
 }
 
-enum Outgoing {
-    Text(String),
-    Close(CloseCode, &'static str),
-}
-
-struct SessionEntry {
-    device_id: String,
-    tx: mpsc::UnboundedSender<Outgoing>,
-}
-
 /// Shared state of a running agent.
 pub struct AppState {
     pub identity: Identity,
@@ -95,8 +105,18 @@ pub struct AppState {
     pub port: u16,
     pub addresses: Vec<Ipv4Addr>,
     pub data_dir: PathBuf,
+    pub platform: Arc<dyn Platform>,
+    pub layouts: LayoutStore,
+    pub power: PowerScheduler,
+    /// Performs immediate power actions (the scheduler has its own handle to it).
+    pub power_backend: Arc<dyn PowerBackend>,
+    /// Set when `Config::power_dry_run`: what would have run.
+    pub power_dry_run: Option<Arc<DryRunBackend>>,
+    pub downloads_dir: PathBuf,
+    pub download_root: PathBuf,
+    windows_poll: Duration,
     pairing: Mutex<PairingState>,
-    sessions: Mutex<HashMap<u64, SessionEntry>>,
+    sessions: Mutex<HashMap<u64, Arc<Session>>>,
     next_session: AtomicU64,
     router: Router,
     handshake_timeout: Duration,
@@ -111,6 +131,15 @@ impl AppState {
             .clone()
             .unwrap_or_else(identity::computer_name);
         let identity = Identity::load_or_create(&config.data_dir, host_name)?;
+        let platform: Arc<dyn Platform> = match &config.platform {
+            Some(p) => p.clone(),
+            None => Arc::new(RealPlatform::new(&config.data_dir.join("icon-cache"))),
+        };
+        let power_dry_run = config.power_dry_run.then(|| Arc::new(DryRunBackend::new()));
+        let power_backend: Arc<dyn PowerBackend> = match &power_dry_run {
+            Some(d) => d.clone(),
+            None => Arc::new(SystemPowerBackend),
+        };
         Ok(AppState {
             identity,
             devices: DeviceStore::new(&config.data_dir),
@@ -119,6 +148,20 @@ impl AppState {
             port,
             addresses,
             data_dir: config.data_dir.clone(),
+            platform,
+            layouts: LayoutStore::new(&config.data_dir),
+            power: PowerScheduler::new(power_backend.clone()),
+            power_backend,
+            power_dry_run,
+            downloads_dir: config
+                .downloads_dir
+                .clone()
+                .unwrap_or_else(paths::helm_downloads_dir),
+            download_root: config
+                .download_root
+                .clone()
+                .unwrap_or_else(paths::profile_dir),
+            windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(1),
@@ -147,12 +190,28 @@ impl AppState {
 
     /// Close every open session of `device_id` except `except`.
     pub fn kick_device(&self, device_id: &str, except: Option<u64>) {
-        let sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
-        for (id, s) in sessions.iter() {
-            if s.device_id == device_id && Some(*id) != except {
-                let _ =
-                    s.tx.send(Outgoing::Close(CloseCode::Policy, "device revoked"));
+        for s in self.sessions() {
+            if s.device_id == device_id && Some(s.id) != except {
+                s.close(CloseCode::Policy, "device revoked");
             }
+        }
+    }
+
+    /// Every ready session.
+    pub fn sessions(&self) -> Vec<Arc<Session>> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Send an event to every ready session.
+    pub fn broadcast(&self, name: &str, data: Value) {
+        let text = proto::event(name, data).to_string();
+        for s in self.sessions() {
+            s.send_text(text.clone());
         }
     }
 
@@ -171,6 +230,8 @@ pub struct ServerHandle {
     shutdown_tx: watch::Sender<bool>,
     task: JoinHandle<()>,
     mdns: Option<Advertiser>,
+    background: Vec<JoinHandle<()>>,
+    watchers: Option<WatchGuard>,
 }
 
 impl ServerHandle {
@@ -207,6 +268,13 @@ impl ServerHandle {
     pub async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.task.await;
+        for t in self.background {
+            t.abort();
+        }
+        self.state.power.cancel();
+        if let Some(w) = self.watchers {
+            let _ = tokio::task::spawn_blocking(move || drop(w)).await;
+        }
         if let Some(m) = self.mdns {
             let _ = tokio::task::spawn_blocking(move || m.stop()).await;
         }
@@ -267,6 +335,29 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         None
     };
 
+    // Scheduled power actions announce when they ran (or failed).
+    let weak = Arc::downgrade(&state);
+    state.power.set_listener(move |action, result| {
+        if let Some(st) = weak.upgrade() {
+            let detail = match result {
+                Ok(()) => format!("action={action:?} ran"),
+                Err(e) => format!("action={action:?} failed: {e}"),
+            };
+            st.audit.record("power_run", None, None, &detail);
+            st.broadcast("power.scheduled", serde_json::json!({"scheduled": null}));
+        }
+    });
+
+    let (events_tx, events_rx) = mpsc::unbounded_channel();
+    let watchers = {
+        let platform = state.platform.clone();
+        tokio::task::spawn_blocking(move || platform.start_watchers(events_tx)).await?
+    };
+    let background = vec![
+        tokio::spawn(pump_events(state.clone(), events_rx)),
+        tokio::spawn(poll_windows(state.clone())),
+    ];
+
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let task = tokio::spawn(accept_loop(listener, acceptor, state.clone(), shutdown_rx));
     tracing::info!(
@@ -278,7 +369,84 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         shutdown_tx,
         task,
         mdns,
+        background,
+        watchers: Some(watchers),
     })
+}
+
+/// Clipboard text larger than this is left out of `clipboard.changed` (use `clipboard.get`).
+const MAX_EVENT_TEXT: usize = 256 * 1024;
+
+/// Turn watcher callbacks into events for the phones.
+async fn pump_events(state: Arc<AppState>, mut rx: mpsc::UnboundedReceiver<PlatformEvent>) {
+    use serde_json::json;
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            PlatformEvent::Media(m) => state.broadcast("media.changed", json!({"state": m})),
+            PlatformEvent::Volume(v) => {
+                state.broadcast("audio.changed", json!({"level": v.level, "muted": v.muted}))
+            }
+            PlatformEvent::TextFocus(f) => {
+                state.broadcast("input.textFocus", json!({"focused": f}))
+            }
+            PlatformEvent::Clipboard {
+                has_text,
+                has_image,
+            } => {
+                let watching: Vec<_> = state
+                    .sessions()
+                    .into_iter()
+                    .filter(|s| s.clipboard_watch())
+                    .collect();
+                if watching.is_empty() {
+                    continue;
+                }
+                let mut data = json!({"has_image": has_image});
+                if has_text {
+                    let platform = state.platform.clone();
+                    if let Ok(Some(text)) =
+                        crate::platform::blocking(move || platform.clipboard_text()).await
+                        && text.len() <= MAX_EVENT_TEXT
+                    {
+                        data["text"] = Value::String(text);
+                    }
+                }
+                let text = proto::event("clipboard.changed", data).to_string();
+                for s in watching {
+                    s.send_text(text.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Window identity used to detect changes: (hwnd, title, minimized, foreground).
+type WindowKey = (u64, String, bool, bool);
+
+/// Poll the window list while phones are connected; announce `windows.changed` on change.
+async fn poll_windows(state: Arc<AppState>) {
+    let mut interval = tokio::time::interval(state.windows_poll);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut last: Option<Vec<WindowKey>> = None;
+    loop {
+        interval.tick().await;
+        if state.sessions().is_empty() {
+            last = None;
+            continue;
+        }
+        let platform = state.platform.clone();
+        let Ok(list) = crate::platform::blocking(move || platform.list_windows()).await else {
+            continue;
+        };
+        let snapshot: Vec<WindowKey> = list
+            .into_iter()
+            .map(|w| (w.hwnd, w.title, w.is_minimized, w.is_foreground))
+            .collect();
+        if last.as_ref().is_some_and(|l| *l != snapshot) {
+            state.broadcast("windows.changed", serde_json::json!({}));
+        }
+        last = Some(snapshot);
+    }
 }
 
 async fn accept_loop(
@@ -592,23 +760,25 @@ async fn run_session<S>(
     // ---- session ----
     let session_id = state.next_session.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
+    let session = Arc::new(Session::new(
+        session_id,
+        device_id.clone(),
+        tier,
+        tx.clone(),
+    ));
     state
         .sessions
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .insert(
-            session_id,
-            SessionEntry {
-                device_id: device_id.clone(),
-                tx: tx.clone(),
-            },
-        );
+        .insert(session_id, session.clone());
     let ctx = RequestContext {
         device_id: device_id.clone(),
         tier,
         session_id,
+        req_id: 0,
         peer: peer.clone(),
         state: state.clone(),
+        session: session.clone(),
     };
 
     let (mut sink, mut stream) = ws.split();
@@ -617,6 +787,13 @@ async fn run_session<S>(
             match out {
                 Outgoing::Text(t) => {
                     if sink.send(Message::text(t)).await.is_err() {
+                        return;
+                    }
+                }
+                Outgoing::Binary(b, permit) => {
+                    let sent = sink.send(Message::binary(b)).await;
+                    drop(permit);
+                    if sent.is_err() {
                         return;
                     }
                 }
@@ -639,10 +816,13 @@ async fn run_session<S>(
         tokio::select! {
             msg = stream.next() => match msg {
                 Some(Ok(Message::Text(t))) => handle_text(&ctx, &tx, t.as_str()),
-                Some(Ok(Message::Binary(_))) => {
-                    let err = proto::error(codes::BAD_MESSAGE, "expected a JSON text message");
-                    let _ = tx.send(Outgoing::Text(err.to_string()));
-                }
+                Some(Ok(Message::Binary(b))) => match files::decode_frame(&b) {
+                    Ok((id, offset, data)) => session.write_upload(&id, offset, data).await,
+                    Err(why) => {
+                        let err = proto::error(codes::BAD_MESSAGE, &why);
+                        let _ = tx.send(Outgoing::Text(err.to_string()));
+                    }
+                },
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 Some(Ok(_)) => {}
             },
@@ -667,6 +847,7 @@ async fn run_session<S>(
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .remove(&session_id);
+    session.finish().await;
     if !writer_done {
         let _ = tx.send(Outgoing::Close(CloseCode::Normal, ""));
         drop(tx);
@@ -677,6 +858,13 @@ async fn run_session<S>(
 
 /// Parse one request and answer it on its own task (responses may come out of order).
 fn handle_text(ctx: &RequestContext, tx: &mpsc::UnboundedSender<Outgoing>, text: &str) {
+    // Input frames: no id, no reply, applied in order.
+    if let Ok(v) = serde_json::from_str::<Value>(text)
+        && v.get("type").and_then(Value::as_str) == Some("in")
+    {
+        ctx.session.handle_input(&ctx.state.platform, v);
+        return;
+    }
     let req = match proto::parse_request(text) {
         Ok(r) => r,
         Err(why) => {
@@ -686,7 +874,8 @@ fn handle_text(ctx: &RequestContext, tx: &mpsc::UnboundedSender<Outgoing>, text:
             return;
         }
     };
-    let ctx = ctx.clone();
+    let mut ctx = ctx.clone();
+    ctx.req_id = req.id;
     let tx = tx.clone();
     tokio::spawn(async move {
         let id = req.id;
@@ -706,6 +895,9 @@ fn handle_text(ctx: &RequestContext, tx: &mpsc::UnboundedSender<Outgoing>, text:
             Err(_) => proto::res_err(id, "internal", "the method failed unexpectedly"),
         };
         let _ = tx.send(Outgoing::Text(response.to_string()));
+        if let Some(work) = ctx.session.take_after(id) {
+            work.await;
+        }
         if is_revoke && !ctx.state.devices.is_paired(&ctx.device_id) {
             // This device revoked itself: close after the response.
             let _ = tx.send(Outgoing::Close(CloseCode::Normal, "device revoked"));
@@ -721,6 +913,10 @@ mod tests {
     fn state(dir: &std::path::Path) -> Arc<AppState> {
         let mut config = Config::new(dir);
         config.host_name = Some("TEST-PC".into());
+        config.platform = Some(crate::platform::fake::FakePlatform::new());
+        config.power_dry_run = true;
+        config.downloads_dir = Some(dir.join("downloads"));
+        config.download_root = Some(dir.to_path_buf());
         Arc::new(AppState::new(&config, 1234, vec![Ipv4Addr::new(192, 168, 0, 2)]).unwrap())
     }
 
@@ -729,8 +925,10 @@ mod tests {
             device_id: "dev".into(),
             tier,
             session_id: 1,
+            req_id: 1,
             peer: "test".into(),
             state: state.clone(),
+            session: Arc::new(Session::detached(1, "dev", tier)),
         }
     }
 

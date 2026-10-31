@@ -9,6 +9,7 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
+pub use helm_agent::platform::fake::FakePlatform;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use p256::pkcs8::EncodePublicKey;
@@ -34,13 +35,32 @@ pub async fn start_with(
     dir: &Path,
     tweak: impl FnOnce(&mut helm_agent::Config),
 ) -> helm_agent::ServerHandle {
+    start_fake_with(dir, tweak).await.0
+}
+
+/// Start a server that controls a [`FakePlatform`] (never this PC) with dry-run power.
+/// Uploads go to `<dir>/downloads`; downloads are allowed from `<dir>/profile`.
+pub async fn start_fake_with(
+    dir: &Path,
+    tweak: impl FnOnce(&mut helm_agent::Config),
+) -> (helm_agent::ServerHandle, Arc<FakePlatform>) {
+    let fake = FakePlatform::new();
     let mut config = helm_agent::Config::new(dir);
     config.port = 0;
     config.enable_mdns = false;
     config.host_name = Some("TEST-PC".into());
     config.addresses = Some(vec![Ipv4Addr::LOCALHOST]);
+    config.platform = Some(fake.clone());
+    config.power_dry_run = true;
+    config.downloads_dir = Some(dir.join("downloads"));
+    std::fs::create_dir_all(dir.join("profile")).unwrap();
+    config.download_root = Some(dir.join("profile"));
+    config.windows_poll = Duration::from_millis(100);
     tweak(&mut config);
-    helm_agent::start(config).await.expect("server starts")
+    // Safety net: tests must never drive the real PC.
+    assert!(config.platform.is_some() && config.power_dry_run);
+    let server = helm_agent::start(config).await.expect("server starts");
+    (server, fake)
 }
 
 /// Accepts the server only if SHA-256(leaf DER) equals the pinned fingerprint.

@@ -21,6 +21,8 @@ import kotlinx.serialization.json.putJsonObject
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
+import okio.ByteString.Companion.toByteString
 
 /**
  * Test double that plays the PC agent side of PROTOCOL.md over a MockWebServer WebSocket.
@@ -32,7 +34,48 @@ class FakeAgent(
     var validToken: String = "tok_" + "A".repeat(39),
     /** Overrides the host_id put in hello (to test mismatch). */
     var helloHostId: String? = null,
+    /** `hello.features`; null leaves the field out (a Phase 0 agent). */
+    var features: List<String>? = listOf("p1"),
 ) {
+    /** Input frames (`type:"in"`) received, in order. */
+    val inputs = CopyOnWriteArrayList<JsonObject>()
+
+    /** Files completed by `file.upload.end`, by name. */
+    val uploaded = ConcurrentHashMap<String, ByteArray>()
+
+    /** Files `file.download` can serve, by path. */
+    val downloadable = ConcurrentHashMap<String, ByteArray>()
+
+    /** Corrupts the sha256 announced for downloads. */
+    @Volatile
+    var badDownloadHash = false
+
+    @Volatile
+    var dockJson: JsonObject = buildJsonObject { putJsonArray("pages") {} }
+
+    @Volatile
+    var deckJson: JsonObject = buildJsonObject { putJsonArray("buttons") {} }
+
+    private val sockets = CopyOnWriteArrayList<WebSocket>()
+
+    private class Upload(val name: String, val size: Long, val sha: String) {
+        val data = java.io.ByteArrayOutputStream()
+        var nextOffset = 0L
+        var badOffset = false
+    }
+
+    private val uploads = ConcurrentHashMap<String, Upload>()
+
+    /** Sends an event to every authenticated connection. */
+    fun broadcast(name: String, data: JsonObject = JsonObject(emptyMap())) {
+        val msg = buildJsonObject {
+            put("type", "event")
+            put("name", name)
+            put("data", data)
+        }.toString()
+        for (ws in sockets) ws.send(msg)
+    }
+
     data class Device(val name: String, val key: PublicKey, var revoked: Boolean = false)
 
     val devices = ConcurrentHashMap<String, Device>()
@@ -54,8 +97,29 @@ class FakeAgent(
                     put("host_name", hostName)
                     put("nonce", nonce)
                     put("agent_version", "0.1.0-test")
+                    features?.let { f -> putJsonArray("features") { f.forEach { add(JsonPrimitive(it)) } } }
                 }.toString(),
             )
+        }
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (!authed) return error(webSocket, "bad_message", "not authenticated")
+            val b = bytes.toByteArray()
+            if (b.size < 24) return
+            val tid = b.copyOfRange(0, 16).joinToString("") { "%02x".format(it) }
+            val offset = java.nio.ByteBuffer.wrap(b, 16, 8).long
+            val up = uploads[tid] ?: return
+            if (offset != up.nextOffset) up.badOffset = true
+            up.data.write(b, 24, b.size - 24)
+            up.nextOffset += b.size - 24
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            sockets.remove(webSocket)
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            sockets.remove(webSocket)
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -65,6 +129,7 @@ class FakeAgent(
                 "pair" -> onPair(webSocket, msg)
                 "auth" -> onAuth(webSocket, msg)
                 "req" -> if (authed) onReq(webSocket, msg) else error(webSocket, "bad_message", "not authenticated")
+                "in" -> if (authed) inputs += msg else error(webSocket, "bad_message", "not authenticated")
                 else -> error(webSocket, "bad_message", "unknown type")
             }
         }
@@ -101,6 +166,7 @@ class FakeAgent(
         private fun ready(ws: WebSocket, id: String) {
             deviceId = id
             authed = true
+            sockets += ws
             ws.send(
                 buildJsonObject {
                     put("type", "ready")
@@ -161,6 +227,64 @@ class FakeAgent(
                     ok(ws, id, buildJsonObject { put("slow", true) })
                 }.start()
                 "test.never" -> Unit
+                "test.emit" -> {
+                    ok(ws, id, JsonObject(emptyMap()))
+                    broadcast(params.s("name")!!, params["data"] as? JsonObject ?: JsonObject(emptyMap()))
+                }
+                "dock.get" -> ok(ws, id, dockJson)
+                "dock.set" -> {
+                    dockJson = buildJsonObject { put("pages", params["pages"]!!) }
+                    ok(ws, id, JsonObject(emptyMap()))
+                    broadcast("dock.changed")
+                }
+                "deck.get" -> ok(ws, id, deckJson)
+                "deck.set" -> {
+                    deckJson = buildJsonObject { put("buttons", params["buttons"]!!) }
+                    ok(ws, id, JsonObject(emptyMap()))
+                    broadcast("deck.changed")
+                }
+                "file.upload.begin" -> {
+                    val tid = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+                    uploads[tid] = Upload(params.s("name")!!, (params["size"] as JsonPrimitive).longOrNull!!, params.s("sha256")!!)
+                    ok(ws, id, buildJsonObject { put("transfer_id", tid) })
+                }
+                "file.upload.end" -> {
+                    val up = uploads.remove(params.s("transfer_id"))
+                    val bytes = up?.data?.toByteArray()
+                    val sha = bytes?.let { sha256Hex(it) }
+                    if (up == null || up.badOffset || bytes!!.size.toLong() != up.size || sha != up.sha) {
+                        reqError(ws, id, "bad_params", "hash mismatch")
+                    } else {
+                        uploaded[up.name] = bytes
+                        ok(ws, id, buildJsonObject { put("path", "C:\\Users\\test\\Downloads\\Helm\\" + up.name) })
+                    }
+                }
+                "file.download" -> {
+                    val path = params.s("path")!!
+                    val data = downloadable[path] ?: return reqError(ws, id, "bad_params", "no such file")
+                    val tidBytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
+                    val tid = tidBytes.joinToString("") { "%02x".format(it) }
+                    ok(ws, id, buildJsonObject {
+                        put("transfer_id", tid)
+                        put("size", data.size)
+                        put("sha256", if (badDownloadHash) "00".repeat(32) else sha256Hex(data))
+                        put("name", path.substringAfterLast('\\'))
+                    })
+                    var off = 0
+                    while (off < data.size) {
+                        val n = minOf(256 * 1024, data.size - off)
+                        val frame = java.nio.ByteBuffer.allocate(24 + n).put(tidBytes).putLong(off.toLong()).put(data, off, n).array()
+                        ws.send(frame.toByteString())
+                        off += n
+                    }
+                    ws.send(
+                        buildJsonObject {
+                            put("type", "event")
+                            put("name", "file.done")
+                            putJsonObject("data") { put("transfer_id", tid) }
+                        }.toString(),
+                    )
+                }
                 "test.close" -> ws.close(1000, "bye")
                 else -> ws.send(
                     buildJsonObject {
@@ -174,6 +298,20 @@ class FakeAgent(
                     }.toString(),
                 )
             }
+        }
+
+        private fun reqError(ws: WebSocket, id: Long, code: String, message: String) {
+            ws.send(
+                buildJsonObject {
+                    put("type", "res")
+                    put("id", id)
+                    put("ok", false)
+                    putJsonObject("error") {
+                        put("code", code)
+                        put("message", message)
+                    }
+                }.toString(),
+            )
         }
 
         private fun ok(ws: WebSocket, id: Long, result: JsonObject) {
@@ -201,5 +339,8 @@ class FakeAgent(
 
     companion object {
         fun JsonObject.s(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
+
+        fun sha256Hex(b: ByteArray): String =
+            java.security.MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
     }
 }

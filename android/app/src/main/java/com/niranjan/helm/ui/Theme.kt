@@ -24,7 +24,18 @@ private val HelmDark = darkColorScheme(
     error = Color(0xFFFFB4AB),
 )
 
+/** True black surfaces for OLED panels (and less glow on a desk at night). */
+private val HelmAmoled = HelmDark.copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceVariant = Color(0xFF111418),
+    surfaceContainer = Color(0xFF0A0C0F),
+    surfaceContainerHigh = Color(0xFF121519),
+    surfaceContainerLow = Color(0xFF050607),
+    surfaceContainerHighest = Color(0xFF181B20),
+)
+
 @Composable
-fun HelmTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = HelmDark, content = content)
+fun HelmTheme(amoled: Boolean = false, content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = if (amoled) HelmAmoled else HelmDark, content = content)
 }
