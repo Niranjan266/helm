@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -94,6 +95,7 @@ enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean
     SCREEN("Screen", Icons.Filled.AccountBox, true),
     MEDIA("Media & Controls", Icons.Filled.PlayArrow, true),
     DECK("Deck", Icons.Filled.Star, true),
+    GAMEPAD("Gamepad", Icons.Filled.ThumbUp, false),
     MONITOR("Monitor & alerts", Icons.Filled.Info, false, p3 = true),
     TASKS("Task manager", Icons.Filled.Build, false, p3 = true),
     MIXER("Volume mixer", Icons.Filled.Notifications, false, p3 = true),
@@ -295,6 +297,7 @@ private fun ScreenContent(
         Screen.DOCK -> DockScreen(remote, settings, landscape, onOpenApps = { go(Screen.APPS) })
         Screen.APPS -> AppsScreen(remote)
         Screen.TOUCHPAD -> TouchpadScreen(remote, settings)
+        Screen.GAMEPAD -> GamepadScreen(remote, settings)
         Screen.SCREEN -> StreamScreen(remote, settings)
         Screen.MEDIA -> MediaScreen(remote, landscape)
         Screen.DECK -> DeckScreen(remote, settings)
