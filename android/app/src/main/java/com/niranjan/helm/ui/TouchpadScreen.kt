@@ -28,16 +28,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -83,7 +77,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niranjan.helm.core.KeyPress
 import com.niranjan.helm.core.MouseButton
 import com.niranjan.helm.core.TextDiff
-import com.niranjan.helm.core.TouchpadMath
+import com.niranjan.helm.core.PointerGain
+import com.niranjan.helm.core.ScrollVelocityTracker
+import com.niranjan.helm.core.ThreeFingerSwipe
+import com.niranjan.helm.device.GestureSettings
+import com.niranjan.helm.device.GestureStore
 import com.niranjan.helm.core.Vk
 import com.niranjan.helm.device.GyroSensor
 import com.niranjan.helm.device.Settings
@@ -94,7 +92,7 @@ import kotlin.math.max
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-private enum class TwoFinger { NONE, SCROLL, PINCH }
+private enum class TwoFinger { NONE, SCROLL, PINCH, SWIPE }
 
 private val ControlGap = 8.dp
 
@@ -127,6 +125,10 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
     var autoShown by remember { mutableStateOf(false) }
     val rui by remote.ui.collectAsStateWithLifecycle()
     val showAirMouse = rui.phase4 && GyroSensor.available(context)
+    val gestureStore = remember { GestureStore.get(context) }
+    val gestures by gestureStore.settings.collectAsStateWithLifecycle()
+    var gestureDialog by remember { mutableStateOf(false) }
+    if (gestureDialog) GestureOptionsDialog(gestures, onChange = { g -> gestureStore.update { g } }, onDismiss = { gestureDialog = false })
 
     // Wi-Fi power-save adds delay between packets; keep the radio awake while the pad is open.
     DisposableEffect(Unit) {
@@ -173,6 +175,9 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
             speed = speed,
             onSpeed = { speed = it },
             onSpeedDone = { remote.setTouchpadSpeed(speed) },
+            precision = gestures.precision,
+            onPrecision = { gestureStore.update { it.copy(precision = !it.precision) } },
+            onGestures = { gestureDialog = true },
         )
     }
     val pad = @Composable { modifier: Modifier ->
@@ -181,6 +186,7 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
                 remote = remote,
                 speed = speed,
                 haptics = settings.haptics,
+                gestures = gestures,
                 onLeftTap = { dragLock = remote.isDragLocked },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
@@ -226,20 +232,33 @@ private fun PadToolbar(
     speed: Float,
     onSpeed: (Float) -> Unit,
     onSpeedDone: () -> Unit,
+    precision: Boolean = false,
+    onPrecision: () -> Unit = {},
+    onGestures: () -> Unit = {},
 ) {
     val c = Bp.c
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        MonoLabel("Speed")
-        DiamondSlider(
-            value = speed,
-            onValueChange = onSpeed,
-            onValueChangeFinished = onSpeedDone,
-            valueRange = 0.4f..3f,
-            modifier = Modifier.weight(1f),
-        )
-        Text("%.1f×".format(speed), style = BpType.monoStrong, color = c.ink, textAlign = TextAlign.End, modifier = Modifier.width(40.dp))
-        if (airMouse != null) MonoChip("Air mouse", onClick = onAirMouse, selected = airMouse, height = 36.dp)
-        MonoChip("Drag lock", onClick = onDragLock, selected = dragLock, height = 36.dp)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            MonoChip("Drag lock", onClick = onDragLock, selected = dragLock, height = 36.dp)
+            if (airMouse != null) MonoChip("Air mouse", onClick = onAirMouse, selected = airMouse, height = 36.dp)
+            MonoChip("Precision", onClick = onPrecision, selected = precision, height = 36.dp)
+            MonoChip("Gestures", onClick = onGestures, dashed = true, height = 36.dp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            MonoLabel("Speed")
+            DiamondSlider(
+                value = speed,
+                onValueChange = onSpeed,
+                onValueChangeFinished = onSpeedDone,
+                valueRange = 0.4f..3f,
+                modifier = Modifier.weight(1f),
+            )
+            Text("%.1f×".format(speed), style = BpType.monoStrong, color = c.ink, textAlign = TextAlign.End, modifier = Modifier.width(40.dp))
+        }
     }
 }
 
@@ -248,9 +267,17 @@ private fun TouchSurface(
     remote: RemoteViewModel,
     speed: Float,
     haptics: Boolean,
+    gestures: GestureSettings = GestureSettings(),
     onLeftTap: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val currentGestures by rememberUpdatedState(gestures)
+    val momentum = rememberMomentum { dx, dy ->
+        remote.touchScroll(dx, dy)
+        remote.flushInput()
+    }
+    val swipePx = with(LocalDensity.current) { 48.dp.toPx() }
+    val scrollVelocity = remember { ScrollVelocityTracker() }
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
     val currentSpeed by rememberUpdatedState(speed)
@@ -274,6 +301,12 @@ private fun TouchSurface(
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
+                    // Any new touch stops a running fling.
+                    momentum.cancel()
+                    scrollVelocity.reset()
+                    var swipeX = 0f
+                    var swipeY = 0f
+                    var swipeFired = false
                     used = true
                     val start = first.uptimeMillis
                     var last = start
@@ -313,7 +346,7 @@ private fun TouchSurface(
                                 val rd = hypot(rx, ry)
                                 // Feed the smoothed speed in as an equivalent time step.
                                 val dtEff = if (velocity > 0f) rd / velocity else dt
-                                val (dx, dy) = TouchpadMath.accelerate(rx, ry, dtEff, currentSpeed)
+                                val (dx, dy) = PointerGain.apply(rx, ry, dtEff, currentSpeed, currentGestures.precision)
                                 remote.touchMove(dx, dy)
                                 remote.flushInput()
                             } else {
@@ -329,17 +362,36 @@ private fun TouchSurface(
                             centroidTravel += dc.getDistance()
                             spanTravel += ds
                             moved += dc.getDistance() + abs(ds)
+                            if (mode == TwoFinger.NONE && maxPointers >= 3 && currentGestures.threeFinger) mode = TwoFinger.SWIPE
+                            if (mode == TwoFinger.SWIPE) {
+                                // Centroid of every finger still down (all three, or what is left while lifting).
+                                val n = pressed.size
+                                swipeX += pressed.fold(0f) { acc, p -> acc + (p.position.x - p.previousPosition.x) } / n
+                                swipeY += pressed.fold(0f) { acc, p -> acc + (p.position.y - p.previousPosition.y) } / n
+                                if (!swipeFired && pressed.size >= 3) {
+                                    val dir = ThreeFingerSwipe.classify(swipeX, swipeY, swipePx)
+                                    if (dir != null) {
+                                        swipeFired = true
+                                        remote.flushInput()
+                                        remote.sendAll(ThreeFingerSwipe.frames(dir, currentGestures.sideSwipe))
+                                        if (currentHaptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    }
+                                }
+                            }
                             if (mode == TwoFinger.NONE && moved > slop * 1.5f) {
                                 mode = if (abs(spanTravel) > centroidTravel) TwoFinger.PINCH else TwoFinger.SCROLL
                                 if (mode == TwoFinger.PINCH) remote.pinch(true)
                             }
                             when (mode) {
                                 // Natural scrolling: fingers down = content down = wheel up (dy > 0).
-                                TwoFinger.SCROLL -> remote.touchScroll(-dc.x / notchPx, dc.y / notchPx)
+                                TwoFinger.SCROLL -> {
+                                    remote.touchScroll(-dc.x / notchPx, dc.y / notchPx)
+                                    scrollVelocity.add(end, -dc.x / notchPx, dc.y / notchPx)
+                                }
                                 TwoFinger.PINCH -> remote.touchScroll(0f, ds / pinchPx)
-                                TwoFinger.NONE -> Unit
+                                TwoFinger.NONE, TwoFinger.SWIPE -> Unit
                             }
-                            if (mode != TwoFinger.NONE) remote.flushInput()
+                            if (mode == TwoFinger.SCROLL || mode == TwoFinger.PINCH) remote.flushInput()
                         }
                         event.changes.forEach { it.consume() }
                     }
@@ -348,7 +400,9 @@ private fun TouchSurface(
                     val tap = moved < slop && end - start < 300
                     if (tap) {
                         if (currentHaptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        if (maxPointers >= 2) {
+                        if (maxPointers >= 3) {
+                            remote.click(MouseButton.MIDDLE)
+                        } else if (maxPointers >= 2) {
                             remote.click(MouseButton.RIGHT)
                         } else {
                             remote.click(MouseButton.LEFT)
@@ -356,6 +410,10 @@ private fun TouchSurface(
                         }
                     } else {
                         remote.flushInput()
+                        if (mode == TwoFinger.SCROLL && currentGestures.momentum) {
+                            val (vx, vy) = scrollVelocity.velocity(end)
+                            momentum.start(vx, vy)
+                        }
                     }
                 }
             },
@@ -364,7 +422,7 @@ private fun TouchSurface(
         MonoLabel("Fig. 2 · Touch area", modifier = Modifier.align(Alignment.TopStart).padding(start = 10.dp, top = 8.dp))
         if (!used) {
             Text(
-                "1 finger · move · tap = click\n2 fingers · scroll · pinch = zoom\n2-finger tap = right click".uppercase(),
+                "1 finger · move · tap = click\n2 fingers · scroll · pinch = zoom\n2-finger tap = right click\n3 fingers · swipe = task view / desktop / switch".uppercase(),
                 style = BpType.mono.copy(lineHeight = 20.sp, letterSpacing = 0.06.em),
                 color = c.ink2,
                 textAlign = TextAlign.Center,
