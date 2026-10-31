@@ -3,6 +3,8 @@
 The Windows PC side of Helm. Phase 0: secure discovery, QR pairing and trusted devices.
 Phase 1 (`features:["p1"]`): apps, windows, input, media, volume, brightness, power, dock,
 deck, clipboard, file transfer, screenshots and live events.
+Phase 2 (`features:["p1","p2"]`): live screen (H.264) + system audio (Opus) + cursor overlay on
+a second `/stream` socket, adaptive bitrate, direct-touch `ma` input.
 The wire contract is [`Docs/PROTOCOL.md`](../../Docs/PROTOCOL.md).
 
 ## Build
@@ -13,7 +15,10 @@ Needs Rust (stable, MSVC toolchain). No C toolchain beyond MSVC is needed (rustl
 cargo build --release      # target\release\helm-agent.exe
 cargo test                 # unit + end-to-end tests (TLS + WebSocket, in-process)
 cargo clippy --all-targets
+cargo test --test phase2 -- --ignored --nocapture   # live: streams this PC's screen 2 s, injects nothing
 ```
+
+`Cargo.toml` builds `unsafe-libopus` (helm-win-audio's codec) optimised even in dev/test.
 
 Tests never touch this PC: they run against `platform::fake::FakePlatform` (records calls,
 canned data) with `Config::power_dry_run = true`, and save/serve files in temp folders.
@@ -67,12 +72,12 @@ Files sent from the phone go to `<Downloads>\Helm` (name made safe, never overwr
 `a (1).txt`). `file.download` (admin) only serves regular files under the user's profile
 folder, never the Helm data folder, at most 4 GiB, SHA-256 announced first.
 
-## Architecture (Phase 1)
+## Architecture (Phases 1–2)
 
 - `platform/` — the `Platform` trait: every OS call (apps, windows, input injector, media,
   volume, brightness, clipboard, adapters/battery, monitors/screenshots, watchers).
-  `real.rs` uses the `helm-win-apps`, `helm-win-input`, `helm-win-system` and
-  `helm-win-capture` crates; `fake.rs` is the test double. Calls are blocking and run in
+  `real.rs` uses the `helm-win-apps`, `helm-win-input`, `helm-win-system`,
+  `helm-win-capture` and `helm-win-audio` crates (plus `cursor.rs`); `fake.rs` is the test double. Calls are blocking and run in
   `spawn_blocking`.
 - `session.rs` — per connection: outgoing queue (text + binary frames with backpressure),
   one injector thread for `in` frames (`release_all` on disconnect), uploads, clipboard-watch
@@ -80,6 +85,19 @@ folder, never the Helm data folder, at most 4 GiB, SHA-256 announced first.
 - `server.rs` — session registry and `broadcast`; watcher events → `media.changed`,
   `audio.changed`, `input.textFocus`, `clipboard.changed` (watching sessions only); window
   list polled every 2 s while phones are connected → `windows.changed`.
+- `stream/` (Phase 2) — `mod.rs` pure parts: frame encoding `[kind][pts µs BE][payload]`,
+  `StreamQueue` (≤ 3 video frames; overflow drops non-key frames until the next keyframe, asks for
+  an IDR when it drains; audio ≤ 25 packets drop-oldest; cursor position coalesced), `Abr`
+  (−20 % on phone drops / growing backlog / agent drops, +10 % after 5 s healthy, floor 500 kbit/s,
+  ceiling = requested), `StreamClock` (video + audio + cursor on one clock, anchored at first
+  delivery), `TokenStore` (single-use, device-bound, 30 s). `active.rs` runs a stream (encoder via
+  `Platform::start_video`, audio via `start_audio`, cursor thread polling `GetCursorInfo` at ~60 Hz
+  and sending each new cursor image once); `socket.rs` serves `/stream` (auth only, then
+  `stream.open{token}`). `modules/stream.rs` has the methods; a watchdog ends streams that were not
+  opened in time or whose capture stopped (`stream.ended{reason}` event). Closing either socket
+  stops the stream. `record.start/stop` answer `unsupported` (MP4 recording not built yet).
+- The process is made per-monitor-v2 DPI aware at start, so capture, cursor and `ma` share
+  physical virtual-desktop pixels.
 - Power uses `PowerScheduler` (`SystemPowerBackend`, or `DryRunBackend` when
   `Config::power_dry_run`); power, cancel, uploads and downloads are written to `audit.log`.
 

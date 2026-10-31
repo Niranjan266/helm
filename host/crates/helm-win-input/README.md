@@ -46,6 +46,10 @@ let text = clipboard::get_text()?;               // Option<String>
 Key names map to virtual-key codes with `name_to_vk("ctrl")`, `vk_to_name(0x11)` and
 `parse_shortcut("ctrl+shift+esc")`. `accelerate(dx, dy, speed)` is an optional pointer
 curve. You can turn it on with `Injector::set_pointer_speed(Some(speed))`.
+`Injector::move_to(x, y)` moves the pointer to an absolute virtual-desktop pixel
+(`SendInput` with `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`, `Op::MoveTo`); the agent uses
+it for the phone's direct-touch `ma` frames. Call it from a per-monitor-v2 DPI aware process
+so the pixels are physical.
 
 ## Errors
 

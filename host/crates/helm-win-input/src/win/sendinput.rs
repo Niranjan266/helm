@@ -7,12 +7,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSE_EVENT_FLAGS, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
     MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
-    MapVirtualKeyW, SendInput, VIRTUAL_KEY,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK, MapVirtualKeyW, SendInput, VIRTUAL_KEY,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 use crate::error::{Error, Result};
 use crate::event::MouseButton;
-use crate::inject::{INJECTED_MARKER, Op, Sink};
+use crate::inject::{INJECTED_MARKER, Op, Sink, normalize_absolute};
 use crate::keys::is_extended_vk;
 
 /// Inputs per `SendInput` call; long texts are split into several batches.
@@ -58,6 +61,20 @@ fn keyboard(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
 fn to_input(op: Op) -> INPUT {
     match op {
         Op::Move { dx, dy } => mouse(dx, dy, 0, MOUSEEVENTF_MOVE),
+        Op::MoveTo { x, y } => {
+            // SAFETY: GetSystemMetrics has no preconditions. Values follow the thread's DPI
+            // awareness, the same space as the caller's coordinates.
+            let (vx, vy, vw, vh) = unsafe {
+                (
+                    GetSystemMetrics(SM_XVIRTUALSCREEN),
+                    GetSystemMetrics(SM_YVIRTUALSCREEN),
+                    GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                    GetSystemMetrics(SM_CYVIRTUALSCREEN),
+                )
+            };
+            let (nx, ny) = normalize_absolute(x, y, vx, vy, vw, vh);
+            mouse(nx, ny, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK)
+        }
         Op::Wheel { delta } => mouse(0, 0, delta as u32, MOUSEEVENTF_WHEEL),
         Op::HWheel { delta } => mouse(0, 0, delta as u32, MOUSEEVENTF_HWHEEL),
         Op::Button { button, down } => {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -35,10 +35,13 @@ use crate::proto::{self, Handshake, codes};
 use crate::router::{RequestContext, Router, Tier};
 use crate::session::{Outgoing, Session};
 use crate::store::LayoutStore;
+use crate::stream::{ActiveStream, TokenStore};
 use crate::{files, modules, net, paths, util};
 
 pub const DEFAULT_PORT: u16 = 47820;
 pub const WS_PATH: &str = "/ws";
+/// Second socket for screen / audio frames (PROTOCOL §10).
+pub const STREAM_PATH: &str = "/stream";
 
 /// Settings for an in-process server.
 #[derive(Clone, Debug)]
@@ -66,6 +69,8 @@ pub struct Config {
     pub download_root: Option<PathBuf>,
     /// How often the window list is checked for `windows.changed` while phones are connected.
     pub windows_poll: Duration,
+    /// Lifetime of `stream.start` tokens (30 s by protocol; tests shorten it).
+    pub stream_token_lifetime: Duration,
 }
 
 impl Config {
@@ -84,6 +89,7 @@ impl Config {
             downloads_dir: None,
             download_root: None,
             windows_poll: Duration::from_secs(2),
+            stream_token_lifetime: crate::stream::TOKEN_LIFETIME,
         }
     }
 }
@@ -120,6 +126,10 @@ pub struct AppState {
     next_session: AtomicU64,
     router: Router,
     handshake_timeout: Duration,
+    /// Pending `stream.start` tokens → the stream they open.
+    stream_tokens: Mutex<TokenStore<Weak<ActiveStream>>>,
+    pub(crate) stream_token_lifetime: Duration,
+    next_stream: AtomicU64,
 }
 
 impl AppState {
@@ -167,6 +177,9 @@ impl AppState {
             next_session: AtomicU64::new(1),
             router: Router::new(modules::all()),
             handshake_timeout: config.handshake_timeout,
+            stream_tokens: Mutex::new(TokenStore::new(config.stream_token_lifetime)),
+            stream_token_lifetime: config.stream_token_lifetime,
+            next_stream: AtomicU64::new(1),
         })
     }
 
@@ -217,6 +230,16 @@ impl AppState {
 
     pub fn router(&self) -> &Router {
         &self.router
+    }
+
+    pub(crate) fn next_stream_id(&self) -> u64 {
+        self.next_stream.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn lock_stream_tokens(
+        &self,
+    ) -> std::sync::MutexGuard<'_, TokenStore<Weak<ActiveStream>>> {
+        self.stream_tokens.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn lock_pairing(&self) -> std::sync::MutexGuard<'_, PairingState> {
@@ -502,9 +525,18 @@ async fn handle_connection(
     let ws_config = WebSocketConfig::default()
         .max_message_size(Some(proto::MAX_MESSAGE))
         .max_frame_size(Some(proto::MAX_MESSAGE));
+    let mut path = None;
+    #[allow(clippy::result_large_err)] // the error type is fixed by tungstenite
+    let callback = |req: &Request, resp: Response| {
+        let r = check_path(req, resp);
+        if r.is_ok() {
+            path = Some(req.uri().path().to_string());
+        }
+        r
+    };
     let ws = match tokio::time::timeout(
         limit,
-        tokio_tungstenite::accept_hdr_async_with_config(tls, check_path, Some(ws_config)),
+        tokio_tungstenite::accept_hdr_async_with_config(tls, callback, Some(ws_config)),
     )
     .await
     {
@@ -515,13 +547,18 @@ async fn handle_connection(
         }
         Err(_) => return,
     };
-    run_session(state, ws, peer.to_string(), shutdown).await;
+    if path.as_deref() == Some(STREAM_PATH) {
+        crate::stream::socket::run(state, ws, peer.to_string(), shutdown).await;
+    } else {
+        run_session(state, ws, peer.to_string(), shutdown).await;
+    }
 }
 
-/// WebSocket upgrade callback: only `/ws` is served.
+/// WebSocket upgrade callback: only `/ws` and `/stream` are served.
 #[allow(clippy::result_large_err)] // the error type is fixed by tungstenite
 fn check_path(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
-    if req.uri().path() == WS_PATH {
+    let path = req.uri().path();
+    if path == WS_PATH || path == STREAM_PATH {
         Ok(resp)
     } else {
         let mut err = ErrorResponse::new(Some("not found".to_string()));
@@ -531,7 +568,7 @@ fn check_path(req: &Request, resp: Response) -> Result<Response, ErrorResponse> 
 }
 
 /// Send an error, close the socket, and wait briefly for the peer's close.
-async fn fail<S>(mut ws: WebSocketStream<S>, code: &str, message: &str)
+pub(crate) async fn fail<S>(mut ws: WebSocketStream<S>, code: &str, message: &str)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -545,7 +582,7 @@ where
     .await;
 }
 
-async fn send_json<S>(ws: &mut WebSocketStream<S>, value: &Value) -> bool
+pub(crate) async fn send_json<S>(ws: &mut WebSocketStream<S>, value: &Value) -> bool
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -553,14 +590,14 @@ where
 }
 
 /// Read until the first text message, skipping control frames. `None` = connection gone.
-enum First {
+pub(crate) enum First {
     Text(String),
     Binary,
     TimedOut,
     Gone,
 }
 
-async fn read_first<S>(ws: &mut WebSocketStream<S>, deadline: tokio::time::Instant) -> First
+pub(crate) async fn read_first<S>(ws: &mut WebSocketStream<S>, deadline: tokio::time::Instant) -> First
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -694,34 +731,45 @@ fn do_auth(
     Ok((device_id.to_string(), device.tier))
 }
 
-async fn run_session<S>(
-    state: Arc<AppState>,
+/// `hello` -> `pair` / `auth` -> `ready`. Returns the socket and who it is, or `None` after
+/// the error was sent. `allow_pair = false` on `/stream` (§10).
+pub(crate) async fn handshake<S>(
+    state: &Arc<AppState>,
     mut ws: WebSocketStream<S>,
-    peer: String,
-    mut shutdown: watch::Receiver<bool>,
-) where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    peer: &str,
+    allow_pair: bool,
+) -> Option<(WebSocketStream<S>, String, Tier)>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
 {
-    // ---- handshake ----
+    let peer = peer.to_string();
     let nonce = util::b64_encode(&util::random_bytes(32));
     let hello = proto::hello(&state.identity.host_id, &state.identity.host_name, &nonce);
     if !send_json(&mut ws, &hello).await {
-        return;
+        return None;
     }
     let deadline = tokio::time::Instant::now() + state.handshake_timeout;
     let text = match read_first(&mut ws, deadline).await {
         First::Text(t) => t,
-        First::Binary => return fail(ws, codes::BAD_MESSAGE, "expected a JSON text message").await,
+        First::Binary => {
+            fail(ws, codes::BAD_MESSAGE, "expected a JSON text message").await;
+            return None;
+        }
         First::TimedOut => {
             state
                 .audit
                 .record("handshake_timeout", None, Some(&peer), "");
-            return fail(ws, codes::TIMEOUT, "no pair or auth within the time limit").await;
+            fail(ws, codes::TIMEOUT, "no pair or auth within the time limit").await;
+            return None;
         }
-        First::Gone => return,
+        First::Gone => return None,
     };
     let outcome = match proto::parse_handshake(&text) {
         Err(why) => Err((codes::BAD_MESSAGE, why)),
+        Ok(Handshake::Pair { .. }) if !allow_pair => Err((
+            codes::BAD_MESSAGE,
+            "pairing is only allowed on the control socket".to_string(),
+        )),
         Ok(Handshake::Pair {
             token,
             device_id,
@@ -729,7 +777,7 @@ async fn run_session<S>(
             public_key,
             signature,
         }) => do_pair(
-            &state,
+            state,
             &peer,
             &nonce,
             &token,
@@ -741,11 +789,14 @@ async fn run_session<S>(
         Ok(Handshake::Auth {
             device_id,
             signature,
-        }) => do_auth(&state, &peer, &nonce, &device_id, &signature),
+        }) => do_auth(state, &peer, &nonce, &device_id, &signature),
     };
     let (device_id, tier) = match outcome {
         Ok(ok) => ok,
-        Err((code, message)) => return fail(ws, code, &message).await,
+        Err((code, message)) => {
+            fail(ws, code, &message).await;
+            return None;
+        }
     };
     let ready = proto::ready(
         &device_id,
@@ -754,8 +805,22 @@ async fn run_session<S>(
         &state.identity.host_name,
     );
     if !send_json(&mut ws, &ready).await {
-        return;
+        return None;
     }
+    Some((ws, device_id, tier))
+}
+
+async fn run_session<S>(
+    state: Arc<AppState>,
+    ws: WebSocketStream<S>,
+    peer: String,
+    mut shutdown: watch::Receiver<bool>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let Some((ws, device_id, tier)) = handshake(&state, ws, &peer, true).await else {
+        return;
+    };
 
     // ---- session ----
     let session_id = state.next_session.fetch_add(1, Ordering::Relaxed);

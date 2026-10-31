@@ -45,6 +45,104 @@ pub struct Monitor {
     pub is_primary: bool,
 }
 
+/// A rectangle on the virtual desktop (physical pixels).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl From<&Monitor> for Rect {
+    fn from(m: &Monitor) -> Rect {
+        Rect {
+            x: m.x,
+            y: m.y,
+            width: m.width,
+            height: m.height,
+        }
+    }
+}
+
+/// What a screen stream captures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VideoSource {
+    /// A monitor by id; `None` = the primary monitor.
+    Monitor(Option<String>),
+    /// A top-level window by `hwnd`.
+    Window(u64),
+}
+
+/// Parameters of a screen stream (already range-checked by the agent).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoParams {
+    pub source: VideoSource,
+    pub max_width: u32,
+    pub max_height: u32,
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+}
+
+/// Facts about a running screen stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoInfo {
+    /// Encoded picture size.
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    pub hardware: bool,
+    pub encoder_name: String,
+}
+
+/// Encoded H.264 access units: `(annex_b, is_keyframe, pts_us)`. Called on the encoder
+/// thread; must not block (copy into a queue).
+pub type AccessUnitSink = Box<dyn FnMut(&[u8], bool, u64) + Send + 'static>;
+/// Opus packets (48 kHz stereo, 20 ms): `(packet, pts_us)`. Same rules as above.
+pub type AudioSink = Box<dyn FnMut(&[u8], u64) + Send + 'static>;
+
+/// A running screen stream. Dropping it stops capture and encoding (may block briefly:
+/// drop it in `spawn_blocking`).
+pub trait VideoStream: Send + Sync {
+    fn info(&self) -> VideoInfo;
+    /// Next frame becomes an IDR with SPS/PPS.
+    fn request_keyframe(&self);
+    /// Change the encoder's CBR target while running.
+    fn set_bitrate(&self, kbps: u32);
+    /// False once the stream stopped by itself (monitor unplugged, window closed, error).
+    fn is_running(&self) -> bool;
+    fn ended_reason(&self) -> Option<String>;
+    /// Where the captured source is on the virtual desktop now (cursor / `ma` mapping).
+    fn source_rect(&self) -> Option<Rect>;
+}
+
+/// A running system-audio stream. Dropping it stops it.
+pub trait AudioStream: Send + Sync {
+    fn is_running(&self) -> bool;
+    /// Opus pre-skip in 48 kHz samples (the encoder look-ahead), for the phone decoder.
+    fn pre_skip(&self) -> u32;
+}
+
+/// The mouse pointer, virtual-desktop pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct CursorState {
+    pub x: i32,
+    pub y: i32,
+    pub visible: bool,
+    /// Opaque id of the current cursor image (the `HCURSOR` value on Windows).
+    pub handle: u64,
+}
+
+/// A cursor image as PNG with its hotspot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CursorShape {
+    pub width: u16,
+    pub height: u16,
+    pub hot_x: u16,
+    pub hot_y: u16,
+    pub png: Vec<u8>,
+}
+
 /// Something changed on the PC (sent by the watchers).
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlatformEvent {
@@ -97,6 +195,18 @@ pub trait Platform: Send + Sync + Debug + 'static {
 
     /// Start the change watchers (media, volume, text focus, clipboard).
     fn start_watchers(&self, events: EventSink) -> WatchGuard;
+
+    // ---- Phase 2: streaming ----
+
+    /// Start capturing + encoding. Blocks until the encoder runs (or fails).
+    fn start_video(&self, params: VideoParams, sink: AccessUnitSink)
+    -> PResult<Box<dyn VideoStream>>;
+    /// Start system-audio capture → Opus. `unsupported` when not available.
+    fn start_audio(&self, sink: AudioSink) -> PResult<Box<dyn AudioStream>>;
+    /// Current pointer position, visibility and image id (cheap; polled ~60 Hz).
+    fn cursor(&self) -> PResult<CursorState>;
+    /// The image for `handle` (from [`Platform::cursor`]); `None` if it is gone.
+    fn cursor_shape(&self, handle: u64) -> PResult<Option<CursorShape>>;
 }
 
 /// Run a blocking platform call off the async runtime.

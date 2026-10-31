@@ -11,7 +11,8 @@ use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::files::{TransferId, Upload};
-use crate::platform::{InputEvent, Platform};
+use crate::platform::{InputEvent, Platform, Rect};
+use crate::stream::ActiveStream;
 use crate::proto;
 use crate::router::Tier;
 
@@ -26,17 +27,26 @@ pub type AfterResponse = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 type SharedUpload = Arc<tokio::sync::Mutex<Option<Upload>>>;
 
+/// What the per-session input thread does.
+enum InputCmd {
+    Event(InputEvent),
+    /// `ma`: absolute move to a virtual-desktop pixel.
+    MoveTo(i32, i32),
+}
+
 pub struct Session {
     pub id: u64,
     pub device_id: String,
     pub tier: Tier,
     tx: mpsc::UnboundedSender<Outgoing>,
     clipboard_watch: AtomicBool,
-    input: Mutex<Option<std_mpsc::Sender<InputEvent>>>,
+    input: Mutex<Option<std_mpsc::Sender<InputCmd>>>,
     /// Last input error code reported to the phone (reported once until input works again).
     input_error: Arc<Mutex<Option<String>>>,
     uploads: Mutex<HashMap<TransferId, SharedUpload>>,
     after: Mutex<HashMap<i64, AfterResponse>>,
+    /// The screen stream started by this session (`stream.start`), if any.
+    stream: Mutex<Option<Arc<ActiveStream>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -60,6 +70,7 @@ impl Session {
             input_error: Arc::new(Mutex::new(None)),
             uploads: Mutex::new(HashMap::new()),
             after: Mutex::new(HashMap::new()),
+            stream: Mutex::new(None),
         }
     }
 
@@ -106,6 +117,29 @@ impl Session {
         lock(&self.after).remove(&req_id)
     }
 
+    // ---- stream ----
+
+    pub fn stream(&self) -> Option<Arc<ActiveStream>> {
+        lock(&self.stream).clone()
+    }
+
+    /// Install a new stream; returns the one it replaces (the caller stops it).
+    pub fn set_stream(&self, stream: Arc<ActiveStream>) -> Option<Arc<ActiveStream>> {
+        lock(&self.stream).replace(stream)
+    }
+
+    pub fn take_stream(&self) -> Option<Arc<ActiveStream>> {
+        lock(&self.stream).take()
+    }
+
+    /// Forget stream `id` if it is still the current one.
+    pub fn clear_stream(&self, id: u64) {
+        let mut s = lock(&self.stream);
+        if s.as_ref().is_some_and(|a| a.id == id) {
+            *s = None;
+        }
+    }
+
     // ---- input ----
 
     fn report_input_error(
@@ -126,9 +160,25 @@ impl Session {
         if self.tier < Tier::Remote {
             return Self::report_input_error(&self.tx, &self.input_error, "forbidden");
         }
-        let event: InputEvent = match serde_json::from_value(frame) {
-            Ok(e) => e,
-            Err(_) => return Self::report_input_error(&self.tx, &self.input_error, "bad_params"),
+        let cmd = if frame.get("k").and_then(Value::as_str) == Some("ma") {
+            let (Some(x), Some(y)) = (
+                frame.get("x").and_then(Value::as_f64),
+                frame.get("y").and_then(Value::as_f64),
+            ) else {
+                return Self::report_input_error(&self.tx, &self.input_error, "bad_params");
+            };
+            let Some(rect) = self.pointer_rect(platform) else {
+                return Self::report_input_error(&self.tx, &self.input_error, "internal");
+            };
+            let (px, py) = crate::stream::normalized_to_desktop(x, y, rect);
+            InputCmd::MoveTo(px, py)
+        } else {
+            match serde_json::from_value(frame) {
+                Ok(e) => InputCmd::Event(e),
+                Err(_) => {
+                    return Self::report_input_error(&self.tx, &self.input_error, "bad_params");
+                }
+            }
         };
         let mut input = lock(&self.input);
         if input.is_none() {
@@ -141,7 +191,7 @@ impl Session {
             }
         }
         if let Some(sender) = input.as_ref()
-            && sender.send(event).is_err()
+            && sender.send(cmd).is_err()
         {
             *input = None;
         }
@@ -152,16 +202,20 @@ impl Session {
     fn spawn_input_thread(
         &self,
         injector: crate::platform::Injector,
-    ) -> std_mpsc::Sender<InputEvent> {
-        let (sender, receiver) = std_mpsc::channel::<InputEvent>();
+    ) -> std_mpsc::Sender<InputCmd> {
+        let (sender, receiver) = std_mpsc::channel::<InputCmd>();
         let tx = self.tx.clone();
         let last_error = self.input_error.clone();
         let session_id = self.id;
         let spawned = std::thread::Builder::new()
             .name(format!("helm-input-{session_id}"))
             .spawn(move || {
-                while let Ok(event) = receiver.recv() {
-                    match injector.inject(&event) {
+                while let Ok(cmd) = receiver.recv() {
+                    let result = match cmd {
+                        InputCmd::Event(event) => injector.inject(&event),
+                        InputCmd::MoveTo(x, y) => injector.move_to(x, y),
+                    };
+                    match result {
                         Ok(()) => *lock(&last_error) = None,
                         Err(helm_win_input::Error::BlockedByElevation) => {
                             Self::report_input_error(&tx, &last_error, "blocked_by_elevation")
@@ -180,6 +234,19 @@ impl Session {
             tracing::warn!("could not start input thread: {e}");
         }
         sender
+    }
+
+    /// `ma` maps onto the streamed source, or the primary monitor when nothing streams.
+    fn pointer_rect(&self, platform: &Arc<dyn Platform>) -> Option<Rect> {
+        if let Some(rect) = self.stream().and_then(|s| s.source_rect()) {
+            return Some(rect);
+        }
+        let monitors = platform.monitors().ok()?;
+        monitors
+            .iter()
+            .find(|m| m.is_primary)
+            .or(monitors.first())
+            .map(Rect::from)
     }
 
     // ---- uploads ----
@@ -215,6 +282,9 @@ impl Session {
 
     /// Session ended: stop input (releases held keys/buttons) and drop partial uploads.
     pub(crate) async fn finish(&self) {
+        if let Some(s) = self.take_stream() {
+            s.stop();
+        }
         drop(lock(&self.input).take());
         lock(&self.after).clear();
         let uploads: Vec<SharedUpload> = lock(&self.uploads).drain().map(|(_, u)| u).collect();

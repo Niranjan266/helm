@@ -24,6 +24,12 @@ pub enum Op {
         dx: i32,
         dy: i32,
     },
+    /// Absolute pointer position in virtual-desktop pixels (physical pixels when the process
+    /// is per-monitor DPI aware).
+    MoveTo {
+        x: i32,
+        y: i32,
+    },
     Button {
         button: MouseButton,
         down: bool,
@@ -86,6 +92,21 @@ pub fn text_ops(text: &str) -> Vec<Op> {
         }
     }
     ops
+}
+
+/// Maps a virtual-desktop pixel to `SendInput`'s normalised absolute coordinates
+/// (`MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`: 0..=65535 spans the virtual screen
+/// `vx, vy, vw, vh`). Points outside are clamped to the edge.
+pub fn normalize_absolute(x: i32, y: i32, vx: i32, vy: i32, vw: i32, vh: i32) -> (i32, i32) {
+    let axis = |p: i32, origin: i32, size: i32| -> i32 {
+        if size <= 1 {
+            return 0;
+        }
+        let off = (p as i64 - origin as i64).clamp(0, size as i64 - 1);
+        // Round to the nearest unit so every pixel maps back onto itself.
+        ((off * 65535 + (size as i64 - 1) / 2) / (size as i64 - 1)) as i32
+    };
+    (axis(x, vx, vw), axis(y, vy, vh))
 }
 
 /// The UTF-16 code units for one character (1 unit, or a surrogate pair).
@@ -269,6 +290,14 @@ impl Injector {
             return Ok(());
         }
         inner.sink.send(&ops)
+    }
+
+    /// Moves the pointer to an absolute virtual-desktop position (direct-touch mode).
+    /// Clears the relative-motion remainder so later `mm` deltas start fresh.
+    pub fn move_to(&self, x: i32, y: i32) -> Result<()> {
+        let mut inner = self.lock();
+        inner.planner.motion.reset();
+        inner.sink.send(&[Op::MoveTo { x, y }])
     }
 
     /// Releases all held keys and mouse buttons. The tracked state is cleared even when the
@@ -516,6 +545,28 @@ mod tests {
         assert!(inj.held_keys().is_empty());
         inj.release_all().unwrap();
         assert!(rec.take().is_empty());
+    }
+
+    #[test]
+    fn absolute_normalisation_spans_the_virtual_desktop() {
+        // Two monitors: 1920 wide on the left of the primary (virtual x = -1920..1920).
+        let v = (-1920, 0, 3840, 1080);
+        assert_eq!(normalize_absolute(-1920, 0, v.0, v.1, v.2, v.3), (0, 0));
+        assert_eq!(normalize_absolute(1919, 1079, v.0, v.1, v.2, v.3), (65535, 65535));
+        assert_eq!(normalize_absolute(5000, -5, v.0, v.1, v.2, v.3), (65535, 0));
+        let (nx, _) = normalize_absolute(0, 0, v.0, v.1, v.2, v.3);
+        assert!((32760..=32780).contains(&nx), "{nx}");
+        assert_eq!(normalize_absolute(3, 3, 0, 0, 1, 1), (0, 0));
+    }
+
+    #[test]
+    fn move_to_sends_absolute_op_and_resets_remainder() {
+        let rec = Recorder::default();
+        let inj = Injector::with_sink(rec.clone());
+        inj.inject(&InputEvent::MouseMove { dx: 0.6, dy: 0.0 }).unwrap();
+        inj.move_to(-1920, 540).unwrap();
+        inj.inject(&InputEvent::MouseMove { dx: 0.6, dy: 0.0 }).unwrap();
+        assert_eq!(rec.take(), vec![Op::MoveTo { x: -1920, y: 540 }]);
     }
 
     #[test]

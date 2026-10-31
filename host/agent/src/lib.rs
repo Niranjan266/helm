@@ -18,6 +18,7 @@
 //! ```
 
 pub mod audit;
+pub mod cursor;
 pub mod devices;
 pub mod dpapi;
 pub mod files;
@@ -35,6 +36,7 @@ pub mod screen;
 pub mod server;
 pub mod session;
 pub mod store;
+pub mod stream;
 pub mod sysinfo;
 #[cfg(windows)]
 pub mod tray;

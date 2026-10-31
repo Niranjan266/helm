@@ -122,6 +122,23 @@ impl Platform for RealPlatform {
         crate::screen::screenshot_png(monitor_id)
     }
 
+    fn start_video(
+        &self,
+        params: VideoParams,
+        sink: AccessUnitSink,
+    ) -> PResult<Box<dyn VideoStream>> {
+        crate::screen::start_video(params, sink)
+    }
+    fn start_audio(&self, sink: AudioSink) -> PResult<Box<dyn AudioStream>> {
+        crate::screen::start_audio(sink)
+    }
+    fn cursor(&self) -> PResult<CursorState> {
+        crate::cursor::cursor()
+    }
+    fn cursor_shape(&self, handle: u64) -> PResult<Option<CursorShape>> {
+        crate::cursor::cursor_shape(handle)
+    }
+
     fn start_watchers(&self, events: EventSink) -> WatchGuard {
         let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
         let thread = std::thread::Builder::new()
