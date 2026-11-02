@@ -220,6 +220,28 @@ a pen, shows a toast, reads Wi-Fi or makes an HTTP request on the real PC.
   agent's rustls (ring, webpki roots), one request per connection, no redirects, bounded
   bodies; `http://` goes to the crate's std client.
 
+## Everyday (`"g6"` feature)
+
+[`Docs/protocol/everyday.md`](../../Docs/protocol/everyday.md). Code in `src/g6/` and
+`src/modules/everyday.rs`; PC calls are new `Platform` methods (inert defaults, real ones in
+`platform/real_g6.rs`, fakes in `platform/fake.rs`), so `tests/everyday.rs` never reads the real
+clipboard, opens Explorer, reads notifications or runs a power action.
+
+- **Clipboard history** (`g6/clip.rs`, opt-in): last 20 text/PNG items with 128 px thumbnails
+  (`g6/thumb.rs`); skipped when the clipboard has `ExcludeClipboardContentFromMonitorProcessing`,
+  `Clipboard Viewer Ignore` or `CanIncludeInClipboardHistory`=0. Settings in `everyday.json`;
+  `persist` writes `clipboard-history.bin` (DPAPI). `clipboard.pick` sends an item to the phone or
+  re-copies it on the PC.
+- **Quick file drop**: `file.drop{path,mode}` opens / reveals (`explorer /select`) / keeps a file
+  that `file.upload` just saved in `Downloads\Helm`; programs and scripts are only revealed.
+- **Find my phone**: `phone.ring` → event `phone.ring` to the other phone(s); tray **Ring my phone**.
+- **PC notifications**: `pc.notify.watch` asks `UserNotificationListener` for access, then polls the
+  toast list every 2 s and forwards new ones as `pc.notification` (Helm's own toasts skipped).
+- **Schedules** (`g6/schedule.rs`, `schedules.json`): one-off or weekday deck/power actions in local
+  time, checked every 5 s, runs ≤ 10 min late still made; power schedules need admin; runs audited.
+- **Health**: `system.health` = battery, thermal-zone temperature (PDH `\Thermal Zone
+  Information(*)\Temperature`, often absent on desktops), fixed-drive free space, uptime.
+
 ## Firewall
 
 The first time it runs, Windows Defender Firewall asks whether to allow `helm-agent`.

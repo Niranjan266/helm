@@ -136,6 +136,8 @@ pub struct AppState {
     pub p3: crate::p3::P3State,
     /// Phase 5: recordings, terminals, plugins, triggers, Home Assistant.
     pub p5: crate::p5::P5State,
+    /// g6: clipboard history, schedules, PC notifications (Docs/protocol/everyday.md).
+    pub g6: crate::g6::G6State,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -198,6 +200,7 @@ impl AppState {
                 config.trigger_tick,
                 config.wifi_poll,
             ),
+            g6: crate::g6::G6State::new(&config.data_dir),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -409,6 +412,7 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
     ];
     background.extend(crate::p3::spawn(&state));
     background.extend(crate::p5::spawn(&state));
+    background.extend(crate::g6::spawn(&state));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     background.push(tokio::spawn(crate::relay::run(
@@ -450,6 +454,7 @@ async fn pump_events(state: Arc<AppState>, mut rx: mpsc::UnboundedReceiver<Platf
                 has_text,
                 has_image,
             } => {
+                crate::g6::on_clipboard(&state, has_text, has_image);
                 let watching: Vec<_> = state
                     .sessions()
                     .into_iter()

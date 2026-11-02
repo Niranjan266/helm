@@ -47,6 +47,7 @@ class HelmApp : Application() {
         super.onCreate()
         controller = HelmController(this)
         com.niranjan.helm.device.HelmBackground(this, controller).start()
+        com.niranjan.helm.device.EverydayBackground.start(this, controller)
     }
 }
 

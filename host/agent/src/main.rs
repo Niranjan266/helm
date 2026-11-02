@@ -386,6 +386,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
                         TrayCommand::CheckUpdates => {
                             tokio::spawn(check_updates_interactive());
                         }
+                        TrayCommand::RingPhone => {
+                            let n = helm_agent::g6::ring_from_pc(server.state());
+                            tracing::info!("ring my phone: {n} session(s) told");
+                        }
                         TrayCommand::Quit => break,
                     }
                 }

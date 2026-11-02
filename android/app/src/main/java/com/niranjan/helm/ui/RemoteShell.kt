@@ -70,7 +70,7 @@ import com.niranjan.helm.core.ConnectionState
 import com.niranjan.helm.device.Settings
 import kotlinx.coroutines.launch
 
-enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean, val p3: Boolean = false, val p5: Boolean = false) {
+enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean, val p3: Boolean = false, val p5: Boolean = false, val g6: Boolean = false) {
     DOCK("Dock", Icons.Filled.Home, true),
     APPS("Apps", Icons.Filled.Search, true),
     TOUCHPAD("Touchpad", Icons.Filled.Create, true),
@@ -87,6 +87,9 @@ enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean
     TRIGGERS("Triggers", Icons.Filled.DateRange, false, p5 = true),
     HOME_ASSISTANT("Home Assistant", Icons.Filled.Place, false, p5 = true),
     PLUGINS("Plugins", Icons.Filled.AddCircle, false, p5 = true),
+    CLIPBOARD_HISTORY("Clipboard history", Icons.Filled.List, false, g6 = true),
+    SCHEDULES("Schedules", Icons.Filled.DateRange, false, g6 = true),
+    FIND_PHONE("Ring another phone", Icons.Filled.Notifications, false, g6 = true),
     FILES("Files & sharing", Icons.Filled.Share, false),
     SECURITY("Devices & security", Icons.Filled.Lock, false),
     SETTINGS("Settings", Icons.Filled.Settings, false),
@@ -167,7 +170,9 @@ fun RemoteShell(
         drawerContent = {
             ModalDrawerSheet(Modifier.verticalScroll(rememberScrollState())) {
                 Text(session.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
-                Screen.entries.filter { (!it.p3 || remoteUi.phase3) && (!it.p5 || remoteUi.phase5) }.forEach { s ->
+                val g6 = com.niranjan.helm.core.Everyday.FEATURE in session.connection.hostFeatures
+                PcHealthCard(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp), compact = true)
+                Screen.entries.filter { (!it.p3 || remoteUi.phase3) && (!it.p5 || remoteUi.phase5) && (!it.g6 || g6) }.forEach { s ->
                     NavigationDrawerItem(
                         label = { Text(s.label) },
                         icon = { Icon(s.icon, contentDescription = null) },
@@ -275,6 +280,9 @@ fun RemoteShell(
                                 Screen.TRIGGERS -> TriggersScreen(extras)
                                 Screen.HOME_ASSISTANT -> HomeAssistantScreen(extras, remote)
                                 Screen.PLUGINS -> PluginsScreen(extras)
+                                Screen.CLIPBOARD_HISTORY -> ClipboardHistoryScreen()
+                                Screen.SCHEDULES -> SchedulesScreen()
+                                Screen.FIND_PHONE -> FindPhoneScreen()
                                 Screen.SECURITY -> SecurityScreen(main, power)
                                 Screen.DOCK -> DockScreen(remote, settings, landscape, onOpenApps = { go(Screen.APPS) })
                                 Screen.APPS -> AppsScreen(remote)

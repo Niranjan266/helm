@@ -41,6 +41,14 @@ pub struct FakeState {
     pub utc_offset_minutes: i32,
     /// `new_pen` works (true) or reports `unsupported`.
     pub pen_supported: bool,
+    // g6
+    /// The clipboard carries a "do not record" format (password manager).
+    pub clipboard_excluded: bool,
+    pub notify_access: NotifyAccess,
+    /// What Action Center shows.
+    pub pc_notifications: Vec<PcNotification>,
+    pub cpu_temp_c: Option<f32>,
+    pub system_uptime_s: u64,
 }
 
 pub fn sample_process(pid: u32, name: &str) -> ProcessInfo {
@@ -197,6 +205,11 @@ impl Default for FakeState {
             wifi_ssid: None,
             utc_offset_minutes: 0,
             pen_supported: true,
+            clipboard_excluded: false,
+            notify_access: NotifyAccess::Allowed,
+            pc_notifications: Vec::new(),
+            cpu_temp_c: Some(48.5),
+            system_uptime_s: 3600,
             au_size: 200,
             audio_supported: true,
             cursor: CursorState {
@@ -909,6 +922,27 @@ impl Platform for FakePlatform {
 
     fn utc_offset_minutes(&self) -> i32 {
         self.state().utc_offset_minutes
+    }
+
+    // ---- g6 ----
+    fn clipboard_history_allowed(&self) -> PResult<bool> {
+        Ok(!self.state().clipboard_excluded)
+    }
+    fn reveal_in_explorer(&self, path: &std::path::Path) -> PResult<()> {
+        self.record(format!("reveal_in_explorer:{}", path.display()));
+        Ok(())
+    }
+    fn pc_notify_access(&self) -> PResult<NotifyAccess> {
+        Ok(self.state().notify_access)
+    }
+    fn pc_notifications(&self) -> PResult<Vec<PcNotification>> {
+        Ok(self.state().pc_notifications.clone())
+    }
+    fn cpu_temp_c(&self) -> PResult<Option<f32>> {
+        Ok(self.state().cpu_temp_c)
+    }
+    fn system_uptime_s(&self) -> PResult<u64> {
+        Ok(self.state().system_uptime_s)
     }
 }
 
