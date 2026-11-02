@@ -162,6 +162,8 @@ pub struct AppState {
     refresh_addresses: bool,
     /// g6: clipboard history, schedules, PC notifications (Docs/protocol/everyday.md).
     pub g6: crate::g6::G6State,
+    /// G5: app usage stats and custom deck icons.
+    pub g5: crate::g5::G5State,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -228,6 +230,7 @@ impl AppState {
             g4: crate::g4::G4State::new(&config.data_dir, config.approval_timeout),
             refresh_addresses: false,
             g6: crate::g6::G6State::new(&config.data_dir),
+            g5: crate::g5::G5State::new(&config.data_dir),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),

@@ -30,6 +30,8 @@ data class Settings(
     val mirrorApps: Set<String> = emptySet(),
     /** g4: lock Helm after this many minutes in the background; 0 = never (default). */
     val lockAfterMin: Int = 0,
+    /** G5: order dock tiles and the app list by how much each app is used on the PC. */
+    val smartOrder: Boolean = false,
 )
 
 /** Phone-local preferences (not synced to the PC). */
@@ -52,6 +54,7 @@ class AppSettings(context: Context) {
         mirrorNotifications = prefs.getBoolean("nm_on", false),
         mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
         lockAfterMin = prefs.getInt("lock_min", 0).coerceAtLeast(0),
+        smartOrder = prefs.getBoolean("smart_order", false),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -70,6 +73,7 @@ class AppSettings(context: Context) {
             .putBoolean("nm_on", s.mirrorNotifications)
             .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))
             .putInt("lock_min", s.lockAfterMin)
+            .putBoolean("smart_order", s.smartOrder)
             .apply()
         _settings.value = s
     }

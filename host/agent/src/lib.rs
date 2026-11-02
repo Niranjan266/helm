@@ -25,6 +25,7 @@ pub mod dpapi;
 pub mod files;
 pub mod g4;
 pub mod g6;
+pub mod g5;
 pub mod http;
 pub mod identity;
 pub mod mdns;

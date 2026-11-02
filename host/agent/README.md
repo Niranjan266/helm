@@ -13,6 +13,9 @@ the `/stream` socket (`cargo test --test g3 -- --nocapture` prints the latency c
 Phase 4 (`p4`): relay tunnel for access from anywhere, `relay.get`/`relay.set`, `wol.send`,
 gyro air mouse (`gy` input). Phase 5: signed update check, clean start under `helm-service`.
 The wire contract is [`Docs/PROTOCOL.md`](../../Docs/PROTOCOL.md).
+G5 (`g5`): dock folders, deck pages and button sizes, app usage stats (`apps.usage`, from
+launches and the foreground watcher, `usage.json`) and custom icons (`deck.icon.put/get`,
+`deck-icons\`) — see [`Docs/protocol/dock-deck-2.md`](../../Docs/protocol/dock-deck-2.md).
 
 ## Build
 

@@ -25,7 +25,12 @@ pub const MAX_DELAY_MS: u64 = 60_000;
 pub enum TileKind {
     App,
     Open,
+    /// G5 (`Docs/protocol/dock-deck-2.md`): a named group of app/open tiles.
+    Folder,
 }
+
+/// Most tiles inside one dock folder.
+pub const MAX_FOLDER_TILES: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tile {
@@ -37,6 +42,27 @@ pub struct Tile {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// G5: icon reference (`b:<name>` built-in, `c:<hash>` uploaded via `deck.icon.put`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// G5: the tiles inside a `folder` tile (app/open only, no nesting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<Tile>>,
+}
+
+/// G5: the dock as Phase 1 phones see it: folders replaced by their tiles, in place.
+pub fn flatten_pages(pages: &[Vec<Tile>]) -> Vec<Vec<Tile>> {
+    pages
+        .iter()
+        .map(|page| {
+            page.iter()
+                .flat_map(|t| match t.kind {
+                    TileKind::Folder => t.children.clone().unwrap_or_default(),
+                    _ => vec![t.clone()],
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// A deck button's single action (PROTOCOL §9.3).
@@ -178,6 +204,77 @@ pub struct DeckButton {
     pub state: Option<StateBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget: Option<Widget>,
+    /// G5: grid size (omitted = `1x1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<ButtonSize>,
+}
+
+/// G5: deck button size in grid cells (columns x rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ButtonSize {
+    #[serde(rename = "1x1")]
+    One,
+    #[serde(rename = "2x1")]
+    Wide,
+    #[serde(rename = "2x2")]
+    Big,
+}
+
+/// G5: a named deck page listing button ids in display order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeckPage {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub buttons: Vec<String>,
+}
+
+pub const MAX_DECK_PAGES: usize = 32;
+/// Id of the page an old (Phase 1) deck migrates into.
+pub const DEFAULT_PAGE_ID: &str = "main";
+
+/// Make `pages` consistent with `buttons`: unknown and repeated ids dropped, buttons on no
+/// page appended to the first one, and at least one page (a Phase 1 deck migrates to a
+/// single "Main" page holding every button).
+pub fn normalize_deck_pages(mut pages: Vec<DeckPage>, buttons: &[DeckButton]) -> Vec<DeckPage> {
+    if pages.is_empty() {
+        pages.push(DeckPage {
+            id: DEFAULT_PAGE_ID.into(),
+            name: "Main".into(),
+            buttons: Vec::new(),
+        });
+    }
+    let known: std::collections::HashSet<&str> = buttons.iter().map(|b| b.id.as_str()).collect();
+    let mut seen = std::collections::HashSet::new();
+    for p in &mut pages {
+        p.buttons
+            .retain(|id| known.contains(id.as_str()) && seen.insert(id.clone()));
+    }
+    for b in buttons {
+        if !seen.contains(&b.id) {
+            pages[0].buttons.push(b.id.clone());
+        }
+    }
+    pages
+}
+
+pub fn validate_deck_pages(pages: &[DeckPage]) -> Result<(), String> {
+    if pages.len() > MAX_DECK_PAGES {
+        return Err(format!("at most {MAX_DECK_PAGES} deck pages"));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for p in pages {
+        check_len("page id", &p.id, MAX_ID, false)?;
+        if !ids.insert(p.id.as_str()) {
+            return Err(format!("duplicate page id {:?}", p.id));
+        }
+        check_len("page name", &p.name, 64, true)?;
+        if p.buttons.len() > MAX_BUTTONS {
+            return Err(format!("at most {MAX_BUTTONS} buttons per page"));
+        }
+    }
+    Ok(())
 }
 
 /// Check one action (recursively); returns the number of leaf steps it runs.
@@ -254,6 +351,9 @@ struct DockFile {
 struct DeckFile {
     version: u32,
     buttons: Vec<DeckButton>,
+    /// G5 (version 2). Missing in Phase 1 files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pages: Vec<DeckPage>,
 }
 
 fn check_len(what: &str, s: &str, max: usize, allow_empty: bool) -> Result<(), String> {
@@ -279,22 +379,49 @@ pub fn validate_pages(pages: &[Vec<Tile>]) -> Result<(), String> {
             return Err(format!("at most {MAX_TILES_PER_PAGE} tiles per page"));
         }
         for t in page {
-            check_len("tile id", &t.id, MAX_ID, false)?;
-            if !ids.insert(t.id.as_str()) {
-                return Err(format!("duplicate tile id {:?}", t.id));
+            validate_tile(t, &mut ids, true)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_tile<'a>(
+    t: &'a Tile,
+    ids: &mut std::collections::HashSet<&'a str>,
+    top_level: bool,
+) -> Result<(), String> {
+    check_len("tile id", &t.id, MAX_ID, false)?;
+    if !ids.insert(t.id.as_str()) {
+        return Err(format!("duplicate tile id {:?}", t.id));
+    }
+    if let Some(l) = &t.label {
+        check_len("label", l, 200, true)?;
+    }
+    if let Some(i) = &t.icon {
+        check_len("icon", i, 64, true)?;
+    }
+    if t.kind != TileKind::Folder && t.children.is_some() {
+        return Err("only folder tiles have children".into());
+    }
+    match t.kind {
+        TileKind::App => {
+            let a = t.app_id.as_deref().ok_or("app tile needs app_id")?;
+            check_len("app_id", a, 1024, false)?;
+        }
+        TileKind::Open => {
+            let target = t.target.as_deref().ok_or("open tile needs target")?;
+            check_len("target", target, MAX_TEXT, false)?;
+        }
+        TileKind::Folder => {
+            if !top_level {
+                return Err("folders cannot hold folders".into());
             }
-            if let Some(l) = &t.label {
-                check_len("label", l, 200, true)?;
+            let children = t.children.as_deref().unwrap_or_default();
+            if children.is_empty() || children.len() > MAX_FOLDER_TILES {
+                return Err(format!("a folder holds 1..={MAX_FOLDER_TILES} tiles"));
             }
-            match t.kind {
-                TileKind::App => {
-                    let a = t.app_id.as_deref().ok_or("app tile needs app_id")?;
-                    check_len("app_id", a, 1024, false)?;
-                }
-                TileKind::Open => {
-                    let target = t.target.as_deref().ok_or("open tile needs target")?;
-                    check_len("target", target, MAX_TEXT, false)?;
-                }
+            for c in children {
+                validate_tile(c, ids, false)?;
             }
         }
     }
@@ -362,7 +489,14 @@ impl LayoutStore {
 
     pub fn set_dock(&self, pages: Vec<Vec<Tile>>) -> anyhow::Result<()> {
         let _g = self.guard();
-        let file = DockFile { version: 1, pages };
+        let g5 = pages
+            .iter()
+            .flatten()
+            .any(|t| t.kind == TileKind::Folder || t.icon.is_some());
+        let file = DockFile {
+            version: if g5 { 2 } else { 1 },
+            pages,
+        };
         util::atomic_write(
             &self.dir.join(DOCK_FILE),
             serde_json::to_string_pretty(&file)?.as_bytes(),
@@ -377,17 +511,56 @@ impl LayoutStore {
             .unwrap_or_default())
     }
 
-    pub fn set_deck(&self, buttons: Vec<DeckButton>) -> anyhow::Result<()> {
+    /// Phase 1 `deck.set`: replaces the buttons but keeps the G5 pages and, for buttons
+    /// sent without a `size`, their stored size (old phones know neither).
+    pub fn set_deck(&self, mut buttons: Vec<DeckButton>) -> anyhow::Result<()> {
         let _g = self.guard();
+        let old = read_json::<DeckFile>(&self.dir.join(DECK_FILE))?;
+        let (old_buttons, old_pages) = old.map(|f| (f.buttons, f.pages)).unwrap_or_default();
+        for b in &mut buttons {
+            if b.size.is_none() {
+                b.size = old_buttons
+                    .iter()
+                    .find(|o| o.id == b.id)
+                    .and_then(|o| o.size);
+            }
+        }
+        self.write_deck(buttons, old_pages)
+    }
+
+    /// G5 `deck.set{buttons,pages}`: replaces both.
+    pub fn set_deck2(&self, buttons: Vec<DeckButton>, pages: Vec<DeckPage>) -> anyhow::Result<()> {
+        let _g = self.guard();
+        self.write_deck(buttons, pages)
+    }
+
+    fn write_deck(&self, buttons: Vec<DeckButton>, pages: Vec<DeckPage>) -> anyhow::Result<()> {
+        let pages = if pages.is_empty() {
+            pages
+        } else {
+            normalize_deck_pages(pages, &buttons)
+        };
+        let g5 = !pages.is_empty() || buttons.iter().any(|b| b.size.is_some());
         let file = DeckFile {
-            version: 1,
+            version: if g5 { 2 } else { 1 },
             buttons,
+            pages,
         };
         util::atomic_write(
             &self.dir.join(DECK_FILE),
             serde_json::to_string_pretty(&file)?.as_bytes(),
         )?;
         Ok(())
+    }
+
+    /// G5: buttons and pages, normalized (a Phase 1 deck has one "Main" page).
+    pub fn deck_pages(&self) -> anyhow::Result<(Vec<DeckButton>, Vec<DeckPage>)> {
+        let _g = self.guard();
+        let (buttons, pages) = read_json::<DeckFile>(&self.dir.join(DECK_FILE))?
+            .map(|f| (f.buttons, f.pages))
+            .unwrap_or_default();
+        let pages = normalize_deck_pages(pages, &buttons);
+        Ok((buttons, pages))
     }
 }
 
@@ -423,6 +596,8 @@ mod tests {
             app_id: Some("x".into()),
             target: None,
             label: None,
+            icon: None,
+            children: None,
         };
         assert!(validate_pages(&[vec![tile("a"), tile("b")]]).is_ok());
         assert!(validate_pages(&[vec![tile("a")], vec![tile("a")]]).is_err());
@@ -437,6 +612,7 @@ mod tests {
             action,
             state: None,
             widget: None,
+            size: None,
         };
         assert!(validate_buttons(&[b(DeckAction::Hotkey("ctrl+c".into()))]).is_ok());
         assert!(validate_buttons(&[b(DeckAction::Hotkey("ctrl+nope".into()))]).is_err());
@@ -493,8 +669,94 @@ mod tests {
             app_id: None,
             target: Some("https://example.com".into()),
             label: Some("Ex".into()),
+            icon: None,
+            children: None,
         }]];
         s.set_dock(pages.clone()).unwrap();
         assert_eq!(s.dock().unwrap(), pages);
+    }
+
+    #[test]
+    fn g5_folders_validate_and_flatten() {
+        let pages: Vec<Vec<Tile>> = serde_json::from_value(json!([[
+            {"id":"a","kind":"app","app_id":"Fake.Notes"},
+            {"id":"f","kind":"folder","label":"Work","children":[
+                {"id":"b","kind":"app","app_id":"Fake.Store_abc!App"},
+                {"id":"c","kind":"open","target":"https://example.com","icon":"b:globe"}
+            ]}
+        ]]))
+        .unwrap();
+        assert!(validate_pages(&pages).is_ok());
+        let flat = flatten_pages(&pages);
+        let ids: Vec<&str> = flat[0].iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        let bad = |v: Value| {
+            let p: Vec<Vec<Tile>> = serde_json::from_value(v).unwrap();
+            assert!(validate_pages(&p).is_err());
+        };
+        bad(json!([[{"id":"f","kind":"folder","children":[]}]]));
+        bad(json!([[{"id":"f","kind":"folder"}]]));
+        bad(json!([[{"id":"f","kind":"folder","children":[
+            {"id":"g","kind":"folder","children":[{"id":"x","kind":"app","app_id":"a"}]}]}]]));
+        bad(json!([[{"id":"x","kind":"app","app_id":"a"},
+            {"id":"f","kind":"folder","children":[{"id":"x","kind":"app","app_id":"b"}]}]]));
+        bad(json!([[{"id":"x","kind":"app","app_id":"a","children":[]}]]));
+    }
+
+    #[test]
+    fn g5_old_deck_file_migrates_to_one_page() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(DECK_FILE),
+            r##"{"version":1,"buttons":[
+                {"id":"a","label":"A","color":"#000000","action":{"text":"x"}},
+                {"id":"b","label":"B","color":"#000000","action":{"text":"y"}}]}"##,
+        )
+        .unwrap();
+        let s = LayoutStore::new(dir.path());
+        assert_eq!(s.deck().unwrap().len(), 2);
+        let (_, pages) = s.deck_pages().unwrap();
+        assert_eq!(
+            pages,
+            vec![DeckPage {
+                id: "main".into(),
+                name: "Main".into(),
+                buttons: vec!["a".into(), "b".into()]
+            }]
+        );
+        // G5 save with sizes and two pages.
+        let mut buttons = s.deck().unwrap();
+        buttons[1].size = Some(ButtonSize::Big);
+        let two = vec![
+            DeckPage { id: "p1".into(), name: "One".into(), buttons: vec!["a".into(), "zz".into()] },
+            DeckPage { id: "p2".into(), name: "Two".into(), buttons: vec!["b".into(), "a".into()] },
+        ];
+        s.set_deck2(buttons.clone(), two).unwrap();
+        let (_, pages) = s.deck_pages().unwrap();
+        assert_eq!(pages[0].buttons, ["a"]);
+        assert_eq!(pages[1].buttons, ["b"]);
+        // A Phase 1 save (no size, no pages) keeps the stored size and pages.
+        let mut legacy = buttons.clone();
+        legacy[1].size = None;
+        legacy.push(serde_json::from_value(json!(
+            {"id":"c","label":"C","color":"#000000","action":{"text":"z"}})).unwrap());
+        s.set_deck(legacy).unwrap();
+        let (after, pages) = s.deck_pages().unwrap();
+        assert_eq!(after[1].size, Some(ButtonSize::Big));
+        assert_eq!(pages[0].buttons, ["a", "c"]);
+        assert_eq!(pages[1].buttons, ["b"]);
+        let raw: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.path().join(DECK_FILE)).unwrap()).unwrap();
+        assert_eq!(raw["version"], 2);
+        assert_eq!(raw["buttons"][1]["size"], "2x2");
+    }
+
+    #[test]
+    fn g5_deck_pages_validate() {
+        let p = |id: &str| DeckPage { id: id.into(), name: "x".into(), buttons: vec![] };
+        assert!(validate_deck_pages(&[p("a"), p("b")]).is_ok());
+        assert!(validate_deck_pages(&[p("a"), p("a")]).is_err());
+        assert!(validate_deck_pages(&[p("")]).is_err());
+        assert!(serde_json::from_value::<ButtonSize>(json!("3x3")).is_err());
     }
 }

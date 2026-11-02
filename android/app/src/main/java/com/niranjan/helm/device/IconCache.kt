@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import com.niranjan.helm.core.HelmApi
+import com.niranjan.helm.core.getIcon
 import com.niranjan.helm.core.toHex
 import java.io.File
 import java.security.MessageDigest
@@ -31,15 +32,32 @@ class IconCache(context: Context) {
 
     fun peek(hostId: String, appId: String, size: Int = SIZE): Bitmap? = memory.get(key(hostId, appId, size))
 
-    suspend fun get(api: HelmApi, hostId: String, appId: String, size: Int = SIZE): Bitmap? {
-        val k = key(hostId, appId, size)
+    suspend fun get(api: HelmApi, hostId: String, appId: String, size: Int = SIZE): Bitmap? =
+        fetch(key(hostId, appId, size)) { api.appIcon(appId, size) }
+
+    /** G5 custom deck/dock icon (`c:<hash>`, from `deck.icon.get`). Content-addressed, so never stale. */
+    fun peekCustom(hostId: String, icon: String): Bitmap? = memory.get(key(hostId, icon, 0))
+
+    suspend fun getCustom(api: HelmApi, hostId: String, icon: String): Bitmap? =
+        fetch(key(hostId, icon, 0)) { api.getIcon(icon) }
+
+    /** Remembers bytes just uploaded so the new icon shows without a round trip. */
+    fun putCustom(hostId: String, icon: String, png: ByteArray) {
+        val bmp = BitmapFactory.decodeByteArray(png, 0, png.size) ?: return
+        val k = key(hostId, icon, 0)
+        memory.put(k, bmp)
+        missing.remove(k)
+        runCatching { File(dir, "$k.png").writeBytes(png) }
+    }
+
+    private suspend fun fetch(k: String, download: suspend () -> ByteArray?): Bitmap? {
         memory.get(k)?.let { return it }
         if (k in missing) return null
         val mine = CompletableDeferred<Bitmap?>()
         val existing = inFlight.putIfAbsent(k, mine)
         if (existing != null) return existing.await()
         val result = try {
-            load(api, k, appId, size)
+            load(k, download)
         } catch (_: Exception) {
             null
         }
@@ -48,14 +66,14 @@ class IconCache(context: Context) {
         return result
     }
 
-    private suspend fun load(api: HelmApi, k: String, appId: String, size: Int): Bitmap? {
+    private suspend fun load(k: String, download: suspend () -> ByteArray?): Bitmap? {
         val file = File(dir, "$k.png")
         val cached = withContext(Dispatchers.IO) { if (file.exists()) BitmapFactory.decodeFile(file.path) else null }
         if (cached != null) {
             memory.put(k, cached)
             return cached
         }
-        val png = gate.withPermit { api.appIcon(appId, size) }
+        val png = gate.withPermit { download() }
         if (png == null) {
             missing += k
             return null
