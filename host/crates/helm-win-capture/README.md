@@ -56,7 +56,9 @@ so every frame changes and latency is measured on real new frames. It never touc
 | `Streamer::info()` | `StreamInfo`: encoder name, hardware?, GPU input?, async MFT?, profile, sizes |
 | `Streamer::is_running()` | false after the source closed or an error (`stats().ended_reason`) |
 | `list_h264_encoders()` | installed H.264 MFTs, hardware first |
-| `StreamConfig` | `source` (`PrimaryMonitor` / `Monitor(id)` / `Window(hwnd)`), `max_width`, `max_height`, `fps`, `bitrate_kbps`, `gop_frames` (120), `repeat_idle_frames` (true), `encoder` (`Auto` / `HardwareOnly` / `SoftwareOnly`). `validate()` checks ranges |
+| `window_frame_rect(hwnd)` | G3: the window's DWM frame (`DWMWA_EXTENDED_FRAME_BOUNDS`, physical px) = what window capture shows |
+| `window_thumbnail_png(hwnd, max_side)` / `window_rgba` | G3: `PrintWindow(PW_RENDERFULLCONTENT)` still, cropped to the frame, box-filtered; `Unsupported` when minimized / hidden |
+| `StreamConfig` | `source` (`PrimaryMonitor` / `Monitor(id)` / `Window(hwnd)`), `max_width`, `max_height`, `fps`, `bitrate_kbps`, `gop_frames` (120), `repeat_idle_frames` (true), `encoder` (`Auto` / `HardwareOnly` / `SoftwareOnly`), `quality_vs_speed` (33; 0 = fastest, the G3 gaming preset). `validate()` checks ranges |
 | `annexb` | pure Annex-B helpers: NAL iteration, NAL / slice types, keyframe detection, `ParameterSets`, `summarize` |
 | `capture`, `convert`, `encoder`, `d3d` | the pipeline stages, public for experiments |
 
@@ -199,6 +201,7 @@ Screenshot: 1080p PNG in 45–65 ms (~840 KiB).
 ```text
 cargo test                                               # pure + live read-only (monitors, screenshot PNG, encoders)
 cargo test --release -- --ignored --test-threads=1       # streaming: HW auto, SW, own-window capture
+cargo test --release --test window -- --ignored --nocapture  # G3: own window rect, thumbnail, 120 fps low-latency stream
 cargo clippy --all-targets
 ```
 

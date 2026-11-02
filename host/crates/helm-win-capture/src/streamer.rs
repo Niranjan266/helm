@@ -447,6 +447,7 @@ fn pipeline_thread(
             fps: cfg.fps,
             bitrate_kbps: cfg.bitrate_kbps,
             gop_frames: cfg.gop_frames,
+            quality_vs_speed: cfg.quality_vs_speed,
         };
         let encoder = H264Encoder::create(&d3d, &manager, settings, cfg.encoder)?;
         let converter = Nv12Converter::new(&d3d, src_w, src_h, w, h, cfg.fps)?;

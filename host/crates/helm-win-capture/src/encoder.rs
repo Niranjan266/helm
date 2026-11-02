@@ -174,6 +174,8 @@ pub struct EncoderSettings {
     pub fps: u32,
     pub bitrate_kbps: u32,
     pub gop_frames: u32,
+    /// `CODECAPI_AVEncCommonQualityVsSpeed` (0 = fastest).
+    pub quality_vs_speed: u32,
 }
 
 /// One encoded access unit.
@@ -366,7 +368,7 @@ impl H264Encoder {
             self.set_codec("LowLatencyMode", &CODECAPI_AVLowLatencyMode, variant_bool(true));
             self.set_codec("GOPSize", &CODECAPI_AVEncMPVGOPSize, variant_u32(s.gop_frames));
             self.set_codec("BPictureCount=0", &CODECAPI_AVEncMPVDefaultBPictureCount, variant_u32(0));
-            self.set_codec("QualityVsSpeed=33", &CODECAPI_AVEncCommonQualityVsSpeed, variant_u32(33));
+            self.set_codec("QualityVsSpeed", &CODECAPI_AVEncCommonQualityVsSpeed, variant_u32(s.quality_vs_speed.min(100)));
 
             // Output type (must be set before the input type for encoders).
             let mut set = None;

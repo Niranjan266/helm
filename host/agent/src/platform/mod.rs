@@ -95,6 +95,8 @@ pub struct VideoParams {
     pub max_height: u32,
     pub fps: u32,
     pub bitrate_kbps: u32,
+    /// G3 gaming preset: fastest encoder setting and a long GOP (keyframes only on request).
+    pub low_latency: bool,
 }
 
 /// Facts about a running screen stream.
@@ -222,6 +224,11 @@ pub trait Platform: Send + Sync + Debug + 'static {
     -> PResult<Box<dyn VideoStream>>;
     /// Start system-audio capture → Opus. `unsupported` when not available.
     fn start_audio(&self, sink: AudioSink) -> PResult<Box<dyn AudioStream>>;
+    /// G3: a PNG thumbnail of a top-level window, longer side `max_side` px. `Ok(None)` when
+    /// the window has nothing to show (minimized / hidden).
+    fn window_thumbnail_png(&self, _hwnd: u64, _max_side: u32) -> PResult<Option<Vec<u8>>> {
+        Err(RpcError::unsupported("window thumbnails are not available"))
+    }
     /// Current pointer position, visibility and image id (cheap; polled ~60 Hz).
     fn cursor(&self) -> PResult<CursorState>;
     /// The image for `handle` (from [`Platform::cursor`]); `None` if it is gone.

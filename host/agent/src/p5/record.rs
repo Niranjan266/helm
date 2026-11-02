@@ -138,6 +138,7 @@ pub async fn start(
                 max_height: OWN_MAX_HEIGHT,
                 fps: OWN_FPS,
                 bitrate_kbps: OWN_BITRATE_KBPS,
+                low_latency: false,
             };
             let sink_slot = slot.clone();
             let p = platform.clone();

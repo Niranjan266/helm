@@ -161,6 +161,33 @@ impl ActiveStream {
         self.started.elapsed()
     }
 
+    /// G3 gaming preset (low-latency encoder tuning).
+    pub fn low_latency(&self) -> bool {
+        lock(&self.params).low_latency
+    }
+
+    /// G3: `ma{x,y}` normalised to the picture -> desktop pixel. Window streams undo the
+    /// letterbox (the window may have been resized); monitors map onto the whole monitor.
+    pub fn map_normalized(&self, nx: f64, ny: f64) -> Option<(i32, i32)> {
+        let rect = self.source_rect()?;
+        if matches!(lock(&self.params).source, crate::platform::VideoSource::Window(_)) {
+            let info = self.info();
+            return Some(super::picture_to_desktop(nx, ny, rect, info.width, info.height));
+        }
+        Some(super::normalized_to_desktop(nx, ny, rect))
+    }
+
+    /// G3: an `in` frame that arrived on this stream's `/stream` socket. Handled exactly like
+    /// one on the control socket of the session that started the stream (tier checks included).
+    pub fn input(&self, frame: Value) {
+        if self.is_stopped() {
+            return;
+        }
+        if let Some(session) = self.session.upgrade() {
+            session.handle_input(&self.platform, frame);
+        }
+    }
+
     /// Where the streamed source is on the desktop (for `ma` and the cursor).
     pub fn source_rect(&self) -> Option<Rect> {
         *lock(&self.rect)
