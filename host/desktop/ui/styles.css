@@ -208,6 +208,24 @@ input[type='number'] { width: 120px; }
 .step-n { font-family: var(--font-mono); font-weight: 600; font-size: 12px; background: var(--pencil); color: var(--deep); padding: 1px 7px; flex: none; }
 .note { margin: 0; max-width: 520px; font-size: 13px; line-height: 1.6; color: var(--ink-2); border-left: 2px solid var(--pencil); padding-left: 12px; }
 
+/* pairing by code */
+.code-panel { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px dashed var(--line-dash); }
+.code-digits {
+  align-self: flex-start; font-family: var(--font-mono); font-weight: 600; font-size: 52px; line-height: 1; letter-spacing: 0.12em;
+  background: #fff; color: var(--deep); padding: 12px 18px; border: 2px solid var(--deep); box-shadow: 6px 6px 0 var(--deep);
+  user-select: text;
+}
+.code-panel[data-state='expired'] .code-digits { opacity: 0.25; }
+.code-host .v { display: block; }
+
+/* approve new phones */
+.approvals { padding: 16px 32px 0; display: flex; flex-direction: column; gap: 12px; }
+.approval-card { border: 2px solid var(--pencil); background: var(--deep); max-width: 1136px; width: 100%; margin: 0 auto; }
+.approval-card .card-head { color: var(--pencil); border-bottom-color: var(--pencil); }
+.approval-body { padding: 14px; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+.approval-text { flex: 1 1 280px; min-width: 0; overflow-wrap: anywhere; }
+.approval-text .muted { display: block; }
+
 /* ---------------------------------------------------------------- log + tables */
 .log { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; color: var(--ink-3); }
 .log .t { color: var(--ink-2); margin-right: 10px; }
@@ -250,6 +268,7 @@ input[type='number'] { width: 120px; }
   .topbar { gap: 20px; padding: 0 20px; }
   .sheetbar { padding: 12px 20px; }
   .page { padding: 24px 20px; }
+  .approvals { padding: 16px 20px 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

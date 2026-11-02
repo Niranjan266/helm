@@ -2,13 +2,14 @@
 
 use std::sync::{Arc, Mutex};
 
+use helm_agent::g4::PendingPairing;
 use helm_agent::router::Tier;
 use helm_agent::update::{self, UpdateStatus};
 use serde::Serialize;
 use tauri::State;
 
 use crate::activity::Entry;
-use crate::controller::{Controller, PairingView, PhoneView, SettingsView, StatusView};
+use crate::controller::{CodeView, Controller, PairingView, PhoneView, SettingsView, StatusView};
 use crate::settings::{Settings, validate_port};
 
 type Ctl<'a> = State<'a, Arc<Controller>>;
@@ -51,6 +52,36 @@ pub fn get_pairing(ctl: Ctl<'_>) -> Result<Option<PairingView>, String> {
 #[tauri::command]
 pub fn new_pairing(ctl: Ctl<'_>) -> Result<PairingView, String> {
     ctl.new_pairing()
+}
+
+#[tauri::command]
+pub fn get_code_pairing(ctl: Ctl<'_>) -> Option<CodeView> {
+    ctl.current_code()
+}
+
+#[tauri::command]
+pub fn new_code_pairing(ctl: Ctl<'_>) -> Result<CodeView, String> {
+    ctl.new_code()
+}
+
+#[tauri::command]
+pub fn get_pending_pairings(ctl: Ctl<'_>) -> Vec<PendingPairing> {
+    ctl.pending_pairings()
+}
+
+#[tauri::command]
+pub fn resolve_pairing(ctl: Ctl<'_>, request_id: u64, allow: bool) -> bool {
+    ctl.resolve_pairing(request_id, allow)
+}
+
+#[tauri::command]
+pub fn set_require_approval(ctl: Ctl<'_>, on: bool) -> Result<bool, String> {
+    ctl.set_require_approval(on)
+}
+
+#[tauri::command]
+pub fn ring_phone(ctl: Ctl<'_>, device_id: String) -> Result<usize, String> {
+    ctl.ring_phone(&device_id)
 }
 
 #[tauri::command]

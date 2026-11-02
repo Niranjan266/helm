@@ -43,6 +43,9 @@
     <span class="hint">Closing the window keeps Helm in the tray</span>
   </div>
 
+  <!-- A new phone asks to pair and "Ask before a new phone pairs" is on. -->
+  <div class="approvals" id="approvals" role="alert" hidden></div>
+
   <!-- ============================================================ HOME -->
   <main class="page" id="page-home">
     <section class="col col-left">
@@ -137,6 +140,21 @@
         </div>
         <div class="uri" id="pair-uri" title="Pairing link"></div>
       </div>
+
+      <div class="card">
+        <div class="card-head"><span>Fig. 6 · Pairing by code</span><span class="expires" data-code-expires>—</span></div>
+        <div class="card-body form">
+          <p class="muted">The phone camera can't scan? Type a 6-digit code on the phone instead.</p>
+          <div class="code-panel" id="code-panel" hidden>
+            <div class="code-digits" id="code-digits" aria-live="polite"></div>
+            <div class="code-host"><span class="k">Check the phone shows this PC</span><span class="v" id="code-host"></span></div>
+          </div>
+          <div class="inline">
+            <button type="button" class="btn btn-ghost" id="code-btn" data-action="new-pair-code">Use a 6-digit code instead</button>
+          </div>
+          <p class="muted">Works once, expires after 5 minutes. Three wrong codes lock it for 10 minutes.</p>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -172,6 +190,17 @@
             <input type="checkbox" id="s-autostart">
             <span class="switch" aria-hidden="true"></span>
             <span><strong>Start with Windows</strong><br><span class="muted">Helm starts in the tray when you sign in, so phones can connect right away.</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span>New phones</span></div>
+        <div class="card-body">
+          <label class="switch-row">
+            <input type="checkbox" id="s-approval">
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>Ask before a new phone pairs</strong><br><span class="muted">Helm shows Allow / Deny on this PC before it stores a new phone. Phones already paired are not asked again.</span></span>
           </label>
         </div>
       </div>

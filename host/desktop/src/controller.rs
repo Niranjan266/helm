@@ -4,11 +4,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use helm_agent::audit::AuditLog;
 use helm_agent::desktop::InstanceGuard;
 use helm_agent::devices::{Device, DeviceStore};
+use helm_agent::g4::approval::APPROVAL_TIMEOUT;
+use helm_agent::g4::code::display_code;
+use helm_agent::g4::{Approvals, CodePairing, HostEvent, PendingPairing};
 use helm_agent::relay::{self, Relay};
 use helm_agent::router::Tier;
 use helm_agent::{AgentEvent, AppState, Config, Pairing, ServerHandle};
@@ -46,6 +49,7 @@ struct Inner {
     error: Option<String>,
     conns: BTreeMap<u64, Conn>,
     pairing: Option<Pairing>,
+    code: Option<CodePairing>,
     started: Option<Instant>,
     identity: Option<IdentityInfo>,
     guard: Option<InstanceGuard>,
@@ -112,8 +116,18 @@ pub struct PairingView {
     pub expires_in_s: u64,
 }
 
+/// A 6-digit pairing code for the PC screen (Docs/protocol/pairing-security.md section 1).
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct CodeView {
+    /// Grouped for reading, e.g. `"482 913"`.
+    pub code: String,
+    pub host_name: String,
+    pub expires_in_s: u64,
+}
+
 #[derive(Serialize)]
 pub struct SettingsView {
+    pub require_approval: bool,
     pub autostart: bool,
     pub autostart_key: String,
     pub port: u16,
@@ -134,6 +148,7 @@ impl Controller {
                 error: None,
                 conns: BTreeMap::new(),
                 pairing: None,
+                code: None,
                 started: None,
                 identity: None,
                 guard: None,
@@ -206,7 +221,8 @@ impl Controller {
             Ok(handle) => {
                 let events = handle.subscribe();
                 let audit = handle.state().audit.subscribe();
-                let pump = tauri::async_runtime::spawn(pump(self.clone(), events, audit));
+                let host = handle.state().g4.subscribe();
+                let pump = tauri::async_runtime::spawn(pump(self.clone(), events, audit, host));
                 {
                     let mut inner = self.lock();
                     inner.state = Some(handle.state().clone());
@@ -249,11 +265,14 @@ impl Controller {
             inner.state = None;
             inner.conns.clear();
             inner.pairing = None;
+            inner.code = None;
             inner.started = None;
         }
         self.set_run(next, None);
         self.notify("phones");
         self.notify("pairing");
+        self.notify("code");
+        self.notify("approvals");
     }
 
     pub async fn set_paused(self: &Arc<Self>, paused: bool) {
@@ -506,9 +525,109 @@ impl Controller {
         Ok(())
     }
 
+    // ------------------------------------------------------------ 6-digit code (g4)
+
+    fn code_view(c: &CodePairing, now: Instant) -> CodeView {
+        CodeView {
+            code: display_code(&c.code),
+            host_name: c.host_name.clone(),
+            expires_in_s: c.expires_at.saturating_duration_since(now).as_secs(),
+        }
+    }
+
+    /// The code shown now, if any and not expired.
+    pub fn current_code(&self) -> Option<CodeView> {
+        let mut inner = self.lock();
+        let now = Instant::now();
+        if inner.code.as_ref().is_some_and(|c| c.expires_at <= now) {
+            inner.code = None;
+        }
+        inner.code.as_ref().map(|c| Self::code_view(c, now))
+    }
+
+    /// Issue a fresh 6-digit code (the previous one stops working).
+    pub fn new_code(&self) -> Result<CodeView, String> {
+        let state = self
+            .agent()
+            .ok_or("Helm is not running. Resume connections first.")?;
+        let c = state.new_code_pairing().map_err(lock_message)?;
+        let view = Self::code_view(&c, Instant::now());
+        self.lock().code = Some(c);
+        self.notify("code");
+        Ok(view)
+    }
+
+    // ------------------------------------------------------------ approving new phones (g4)
+
+    fn approvals_offline(&self) -> Approvals {
+        Approvals::new(&self.data_dir, APPROVAL_TIMEOUT)
+    }
+
+    pub fn require_approval(&self) -> bool {
+        match self.agent() {
+            Some(st) => st.g4.settings().require_approval,
+            None => self.approvals_offline().require_approval(),
+        }
+    }
+
+    pub fn set_require_approval(&self, on: bool) -> Result<bool, String> {
+        let saved = match self.agent() {
+            Some(st) => st.g4.set_require_approval(on),
+            None => self.approvals_offline().set_require_approval(on),
+        }
+        .map_err(|e| format!("{e:#}"))?;
+        self.record(
+            "require_approval_set",
+            "-",
+            &format!("on={} by=desktop", saved.require_approval),
+        );
+        Ok(saved.require_approval)
+    }
+
+    /// Phones waiting for Allow / Deny, oldest first.
+    pub fn pending_pairings(&self) -> Vec<PendingPairing> {
+        self.agent().map(|st| st.g4.pending()).unwrap_or_default()
+    }
+
+    /// Allow or deny a waiting phone. False if it is no longer waiting.
+    pub fn resolve_pairing(&self, request_id: u64, allow: bool) -> bool {
+        let done = self
+            .agent()
+            .is_some_and(|st| st.g4.resolve(request_id, allow));
+        self.notify("approvals");
+        done
+    }
+
+    // ------------------------------------------------------------ find my phone (g6)
+
+    /// Make one connected phone ring. Returns how many of its sessions were told.
+    pub fn ring_phone(&self, device_id: &str) -> Result<usize, String> {
+        let st = self
+            .agent()
+            .ok_or("Helm is not running. Resume connections first.")?;
+        let n = helm_agent::g6::ring_phones(
+            &st,
+            Some(device_id),
+            None,
+            json!({"name": st.identity.host_name}),
+            false,
+        );
+        if n == 0 {
+            return Err("That phone is not connected right now.".into());
+        }
+        st.audit.record(
+            "phone_ring",
+            Some(device_id),
+            Some(ACTOR),
+            &format!("from=desktop sessions={n}"),
+        );
+        Ok(n)
+    }
+
     pub fn settings(&self) -> SettingsView {
         let relay = self.relay_view();
         SettingsView {
+            require_approval: self.require_approval(),
             autostart: crate::autostart::is_enabled(),
             autostart_key: crate::autostart::registry_path(),
             port: Settings::load(&self.data_dir).port,
@@ -550,6 +669,7 @@ async fn pump(
     ctl: Arc<Controller>,
     mut events: tokio::sync::broadcast::Receiver<AgentEvent>,
     mut audit: tokio::sync::broadcast::Receiver<String>,
+    mut host: tokio::sync::broadcast::Receiver<HostEvent>,
 ) {
     loop {
         tokio::select! {
@@ -580,8 +700,54 @@ async fn pump(
                 Err(RecvError::Lagged(_)) => ctl.notify("activity"),
                 Err(RecvError::Closed) => break,
             },
+            ev = host.recv() => match ev {
+                Ok(ev) => on_host_event(&ctl, &ev),
+                Err(RecvError::Lagged(_)) => {
+                    ctl.notify("approvals");
+                    ctl.notify("code");
+                }
+                Err(RecvError::Closed) => break,
+            },
         }
     }
+}
+
+/// What a g4 host event changes in the window: `(kind to notify, bring the window forward)`.
+fn host_event_effect(ev: &HostEvent) -> Option<(&'static str, bool)> {
+    match ev {
+        HostEvent::PairingRequest(_) => Some(("approvals", true)),
+        HostEvent::PairingResolved { .. } => Some(("approvals", false)),
+        HostEvent::PairingCodeEnded { .. }
+        | HostEvent::PairingLocked { .. }
+        | HostEvent::Paired { .. } => Some(("code", false)),
+        HostEvent::PairingCode { .. } | HostEvent::PairingFailed { .. } => None,
+    }
+}
+
+fn on_host_event(ctl: &Controller, ev: &HostEvent) {
+    if matches!(
+        ev,
+        HostEvent::PairingCodeEnded { .. } | HostEvent::Paired { .. }
+    ) {
+        ctl.lock().code = None;
+    }
+    let Some((kind, forward)) = host_event_effect(ev) else {
+        return;
+    };
+    if matches!(ev, HostEvent::Paired { .. }) {
+        ctl.notify("phones");
+    }
+    ctl.notify(kind);
+    if forward {
+        crate::tray::show_main(&ctl.app);
+    }
+}
+
+/// Text for "code pairing is locked" (3 wrong codes lock it for 10 minutes).
+fn lock_message(left: Duration) -> String {
+    let mins = left.as_secs().div_ceil(60).max(1);
+    let unit = if mins == 1 { "minute" } else { "minutes" };
+    format!("Too many wrong codes. Code pairing is locked for another {mins} {unit}.")
 }
 
 /// After missing events: rebuild the connection list from the agent's sessions.
@@ -609,6 +775,64 @@ fn resync(ctl: &Controller) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending() -> PendingPairing {
+        PendingPairing {
+            request_id: 7,
+            device_id: "d".into(),
+            device_name: "Pixel".into(),
+            peer: "192.168.0.2:1".into(),
+            method: "code".into(),
+            expires_unix_ms: 0,
+        }
+    }
+
+    #[test]
+    fn pairing_request_brings_window_forward() {
+        assert_eq!(
+            host_event_effect(&HostEvent::PairingRequest(pending())),
+            Some(("approvals", true))
+        );
+        let resolved = HostEvent::PairingResolved {
+            request_id: 7,
+            outcome: helm_agent::g4::Outcome::Allowed,
+        };
+        assert_eq!(host_event_effect(&resolved), Some(("approvals", false)));
+        let ended = HostEvent::PairingCodeEnded {
+            reason: "used".into(),
+        };
+        assert_eq!(host_event_effect(&ended), Some(("code", false)));
+        let failed = HostEvent::PairingFailed {
+            method: "code".into(),
+            peer: String::new(),
+            reason: "bad_code".into(),
+        };
+        assert_eq!(host_event_effect(&failed), None);
+    }
+
+    #[test]
+    fn code_view_groups_digits_and_counts_down() {
+        let now = Instant::now();
+        let c = CodePairing {
+            code: "482913".into(),
+            host_name: "DESKTOP-1".into(),
+            expires_at: now + Duration::from_secs(300),
+            expires_unix_ms: 0,
+        };
+        let v = Controller::code_view(&c, now);
+        assert_eq!(v.code, "482 913");
+        assert_eq!(v.host_name, "DESKTOP-1");
+        assert_eq!(v.expires_in_s, 300);
+        let late = Controller::code_view(&c, now + Duration::from_secs(400));
+        assert_eq!(late.expires_in_s, 0);
+    }
+
+    #[test]
+    fn lock_message_rounds_up_minutes() {
+        assert!(lock_message(Duration::from_secs(1)).contains("1 minute."));
+        assert!(lock_message(Duration::from_secs(61)).contains("2 minutes."));
+        assert!(lock_message(Duration::from_secs(600)).contains("10 minutes."));
+    }
 
     #[test]
     fn online_devices_are_distinct_and_ordered() {
