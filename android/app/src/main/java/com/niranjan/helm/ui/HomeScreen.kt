@@ -55,6 +55,8 @@ fun HomeScreen(
     onWake: (SavedPc) -> Unit,
     onScan: () -> Unit,
     onPaste: (String) -> String?,
+    /** g4: pair with a nearby PC by the 6-digit code it shows. Returns an error or null. */
+    onPairCode: (DiscoveredHost, String) -> String? = { _, _ -> "Code pairing is not available." },
 ) {
     var nearbyInfo by remember { mutableStateOf<DiscoveredHost?>(null) }
     var showPaste by remember { mutableStateOf(false) }
@@ -119,12 +121,38 @@ fun HomeScreen(
     }
 
     nearbyInfo?.let { host ->
+        var code by remember(host) { mutableStateOf("") }
+        var codeError by remember(host) { mutableStateOf<String?>(null) }
         AlertDialog(
             onDismissRequest = { nearbyInfo = null },
             title = { Text("Pair with ${host.name}") },
-            text = { Text("To pair, scan the QR code shown on that PC (open Helm on the PC and choose Pair a phone).") },
+            text = {
+                Column {
+                    Text("Scan the QR code shown on that PC, or — if the camera can't — choose Pair with code on the PC and type the 6-digit code. Check that the PC shows the name ${host.name}.")
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = code,
+                        onValueChange = { v -> code = v.filter { it.isDigit() }.take(6); codeError = null },
+                        label = { Text("6-digit code") },
+                        singleLine = true,
+                        isError = codeError != null,
+                        supportingText = codeError?.let { { Text(it) } },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
             confirmButton = {
-                TextButton(onClick = { nearbyInfo = null; onScan() }) { Text("Scan QR") }
+                if (code.length == 6) {
+                    TextButton(onClick = {
+                        val err = onPairCode(host, code)
+                        if (err == null) nearbyInfo = null else codeError = err
+                    }) { Text("Pair with code") }
+                } else {
+                    TextButton(onClick = { nearbyInfo = null; onScan() }) { Text("Scan QR") }
+                }
             },
             dismissButton = { TextButton(onClick = { nearbyInfo = null }) { Text("Close") } },
         )

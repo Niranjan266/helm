@@ -50,6 +50,8 @@ helm://pair?v=1&id=<host_id>&n=<url-encoded host_name>&a=<ip1>,<ip2>&p=<port>&fp
 - Token lifetime: **5 minutes**, single use. Only one token is active at a time.
 - The same URI is printed as text so it can be copied, and the Android app registers the
   `helm://pair` deep link so `adb shell am start -d "<uri>"` or any QR scanner app can open it.
+- Feature `g4`: 6-digit code pairing (no camera), approve on PC, USB tethering address first —
+  see [protocol/pairing-security.md](protocol/pairing-security.md).
 
 ## 5. Handshake
 

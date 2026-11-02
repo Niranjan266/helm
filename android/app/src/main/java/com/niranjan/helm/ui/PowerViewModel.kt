@@ -36,6 +36,8 @@ import com.niranjan.helm.core.setAudioSession
 import com.niranjan.helm.core.setPriority
 import com.niranjan.helm.core.setProfiles
 import com.niranjan.helm.core.setRelayConfig
+import com.niranjan.helm.core.pairingRequiresApproval
+import com.niranjan.helm.core.setPairingRequiresApproval
 import com.niranjan.helm.core.setTier
 import com.niranjan.helm.core.snapWindow
 import com.niranjan.helm.core.statsSubscribe
@@ -77,6 +79,10 @@ data class PowerUi(
     val fsLoading: Boolean = false,
     val audit: List<String>? = null,
     val relay: RelayConfig? = null,
+    /** g4: the PC agent offers pairing settings. */
+    val g4: Boolean = false,
+    /** g4: "ask on the PC before a new phone pairs" (null = not loaded). */
+    val pairApproval: Boolean? = null,
 )
 
 /** Phase 3 (§11) screens: monitor, tasks, mixer, windows, profiles, files, security. */
@@ -107,7 +113,9 @@ class PowerViewModel(app: Application) : AndroidViewModel(app) {
             controller.session
                 .flatMapLatest { s -> s?.connection?.state?.filterIsInstance<ConnectionState.Ready>()?.map { s.connection } ?: flowOf() }
                 .collect { c ->
-                    _ui.update { it.copy(phase3 = c.supportsPhase3, phase4 = c.supportsPhase4) }
+                    _ui.update {
+                        it.copy(phase3 = c.supportsPhase3, phase4 = c.supportsPhase4, g4 = com.niranjan.helm.core.Features.G4 in c.hostFeatures)
+                    }
                     if (monitorUsers > 0) quiet { it.statsSubscribe(INTERVAL_MS) }
                     c.events.collect { ev ->
                         when (ev.name) {
@@ -308,6 +316,18 @@ class PowerViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(relay = RelayConfig(enabled, url.trim().ifBlank { null })) }
                 message(if (enabled) "Relay turned on. Reconnect once on Wi-Fi so this phone learns it." else "Relay turned off.")
             }
+        }
+    }
+
+    fun loadPairApproval() {
+        viewModelScope.launch {
+            quiet { it.pairingRequiresApproval() }?.let { v -> _ui.update { it.copy(pairApproval = v) } }
+        }
+    }
+
+    fun setPairApproval(on: Boolean) {
+        viewModelScope.launch {
+            act("Pairing setting") { it.setPairingRequiresApproval(on) }?.let { v -> _ui.update { it.copy(pairApproval = v) } }
         }
     }
 

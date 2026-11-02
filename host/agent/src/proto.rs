@@ -50,7 +50,7 @@ pub fn hello(host_id: &str, host_name: &str, nonce: &str) -> Value {
 }
 
 /// Optional protocol features this agent speaks (sent in `hello`).
-pub const FEATURES: &[&str] = &["p1", "p2", "p3", "p4", "p5"];
+pub const FEATURES: &[&str] = &["p1", "p2", "p3", "p4", "p5", "g4"];
 
 pub fn event(name: &str, data: Value) -> Value {
     json!({"type": "event", "name": name, "data": data})
@@ -86,6 +86,24 @@ pub mod codes {
     pub const UNKNOWN_DEVICE: &str = "unknown_device";
     pub const BAD_SIGNATURE: &str = "bad_signature";
     pub const TIMEOUT: &str = "timeout";
+    /// g4: the PC owner denied the pairing (or did not answer in time).
+    pub const DENIED: &str = "denied";
+    /// g4: short-code pairing failed (wrong code, no code shown, or a man in the middle).
+    pub const BAD_CODE: &str = "bad_code";
+}
+
+/// g4 `pair_code` (short-code pairing, `Docs/protocol/pairing-security.md`).
+#[derive(Debug, Clone)]
+pub struct PairCode {
+    pub device_id: String,
+    pub device_name: String,
+    pub public_key: String,
+    /// Phone nonce (base64, 32 bytes).
+    pub nonce: String,
+    /// 6 base64 commitments, one per code digit.
+    pub commits: Vec<String>,
+    /// Signature over `helm-v1|pair_code|<host_id>|<hello nonce>`.
+    pub signature: String,
 }
 
 /// What the phone sent in reply to `hello`.
@@ -102,6 +120,8 @@ pub enum Handshake {
         device_id: String,
         signature: String,
     },
+    /// g4 short-code pairing.
+    PairCode(PairCode),
 }
 
 fn field<'a>(v: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -118,18 +138,41 @@ fn device_id_field(v: &Value) -> Result<String, String> {
     Ok(id.to_string())
 }
 
+fn device_name_field(v: &Value) -> Result<String, String> {
+    let mut device_name: String = field(v, "device_name")?
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(100)
+        .collect();
+    if device_name.trim().is_empty() {
+        device_name = "Phone".to_string();
+    }
+    Ok(device_name)
+}
+
 pub fn parse_handshake(text: &str) -> Result<Handshake, String> {
     let v: Value = serde_json::from_str(text).map_err(|_| "message is not JSON".to_string())?;
     match v.get("type").and_then(Value::as_str) {
+        Some("pair_code") => {
+            let commits = v
+                .get("commits")
+                .and_then(Value::as_array)
+                .ok_or("missing \"commits\" array")?
+                .iter()
+                .map(|c| c.as_str().map(str::to_string))
+                .collect::<Option<Vec<String>>>()
+                .ok_or("commits must be strings")?;
+            Ok(Handshake::PairCode(PairCode {
+                device_id: device_id_field(&v)?,
+                device_name: device_name_field(&v)?,
+                public_key: field(&v, "public_key")?.to_string(),
+                nonce: field(&v, "nonce")?.to_string(),
+                commits,
+                signature: field(&v, "signature")?.to_string(),
+            }))
+        }
         Some("pair") => {
-            let mut device_name: String = field(&v, "device_name")?
-                .chars()
-                .filter(|c| !c.is_control())
-                .take(100)
-                .collect();
-            if device_name.trim().is_empty() {
-                device_name = "Phone".to_string();
-            }
+            let device_name = device_name_field(&v)?;
             Ok(Handshake::Pair {
                 token: field(&v, "token")?.to_string(),
                 device_id: device_id_field(&v)?,

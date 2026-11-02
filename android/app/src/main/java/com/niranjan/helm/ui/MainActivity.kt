@@ -48,6 +48,11 @@ class MainActivity : FragmentActivity() {
         )
     }
 
+    /** g4: re-lock after N minutes in the background (setting, default off). */
+    private val appLock by lazy {
+        AppLockController(this) { (application as HelmApp).controller.settings.settings.value.lockAfterMin }
+    }
+
     /** Screen to switch to (from a share intent). */
     private val navTo = MutableStateFlow<Screen?>(null)
 
@@ -85,8 +90,12 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
+                val locked by appLock.locked.collectAsStateWithLifecycle()
                 val s = session
-                if (s == null) {
+                if (locked) {
+                    BackHandler { moveTaskToBack(true) }
+                    LockScreen(onUnlock = appLock::unlock)
+                } else if (s == null) {
                     HomeScreen(
                         saved = saved,
                         discovered = discovered,
@@ -96,6 +105,7 @@ class MainActivity : FragmentActivity() {
                         onWake = vm::wake,
                         onScan = ::scanQr,
                         onPaste = vm::pairFromText,
+                        onPairCode = vm::pairWithCode,
                     )
                 } else {
                     BackHandler { if (screen != Screen.DOCK) screen = Screen.DOCK else vm.disconnect() }
@@ -128,11 +138,13 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
+        appLock.onStart()
         (application as HelmApp).controller.discovery.start()
     }
 
     override fun onStop() {
         (application as HelmApp).controller.discovery.stop()
+        appLock.onStop()
         super.onStop()
     }
 

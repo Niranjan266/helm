@@ -123,6 +123,36 @@ class HelmController(context: Context) {
         }
     }
 
+    /**
+     * g4 short-code pairing with a PC found on the network: the user types the 6-digit code the
+     * PC shows. Nothing is trusted until the code proves the PC's certificate.
+     */
+    fun startCodePairing(host: com.niranjan.helm.core.DiscoveredHost, code: String) {
+        closeCurrent()
+        val conn = HelmConnection(
+            hostId = host.hostId,
+            fingerprint = "0".repeat(64),
+            endpoints = listOf(Endpoint(host.address, host.port)),
+            identity = identity(),
+            mode = HandshakeMode.PairCode(code),
+            transport = com.niranjan.helm.core.CodePairingTransport(),
+        )
+        _session.value = Session(host.hostId, host.name, conn, isPairing = true, fingerprint = "")
+        scope.launch {
+            try {
+                val ready = withContext(Dispatchers.IO) { conn.connect() }
+                val saved = EndpointPlanner.savedFromCodePairing(host, ready, System.currentTimeMillis())
+                savedPcs.upsert(saved)
+                // The stream socket pins the proven fingerprint.
+                _session.value = _session.value?.takeIf { it.connection === conn }?.copy(fingerprint = saved.fingerprint)
+                    ?: _session.value
+                updateName(conn, ready.hostName)
+                rememberMacs(conn, host.hostId)
+            } catch (_: HelmException) {
+            }
+        }
+    }
+
     fun connectSaved(pc: SavedPc) {
         closeCurrent()
         val conn = HelmConnection(

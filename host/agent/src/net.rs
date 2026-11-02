@@ -60,7 +60,72 @@ pub fn rank_addresses(
     out
 }
 
-/// Non-loopback IPv4 addresses of interfaces that are up, LAN first.
+/// Adapter name / description hints of a phone's USB tethering link as Windows sees it
+/// (Android "Remote NDIS based Internet Sharing Device", NCM, iPhone "Apple Mobile Device
+/// Ethernet").
+const USB_TETHER_HINTS: &[&str] = &[
+    "remote ndis",
+    "rndis",
+    "usb ethernet",
+    "ncm",
+    "android",
+    "apple mobile device ethernet",
+    "iphone usb",
+];
+
+/// g4: does this adapter look like a phone's USB tethering link?
+pub fn is_usb_tether(name: &str, description: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    let d = description.to_ascii_lowercase();
+    USB_TETHER_HINTS
+        .iter()
+        .any(|h| n.contains(h) || d.contains(h))
+}
+
+/// [`rank_addresses`], then USB-tethering addresses (`usb`) moved to the front: a phone
+/// plugged in by cable reaches the PC that way even without Wi-Fi (g4 USB pairing).
+pub fn rank_addresses_usb_first(
+    candidates: &[(String, Ipv4Addr)],
+    primary: Option<Ipv4Addr>,
+    usb: &[Ipv4Addr],
+) -> Vec<Ipv4Addr> {
+    let ranked = rank_addresses(candidates, primary);
+    let (mut first, rest): (Vec<Ipv4Addr>, Vec<Ipv4Addr>) =
+        ranked.into_iter().partition(|ip| usb.contains(ip));
+    first.extend(rest);
+    first
+}
+
+/// IPv4 addresses on USB tethering adapters (Windows: by adapter description).
+pub fn usb_tether_addresses() -> Vec<Ipv4Addr> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let descriptions: Vec<(String, String)> = helm_win_system::net::mac_addresses()
+        .map(|list| {
+            list.into_iter()
+                .map(|a| (a.adapter_name, a.description))
+                .collect()
+        })
+        .unwrap_or_default();
+    interfaces
+        .into_iter()
+        .filter(|i| i.is_oper_up() && !i.is_loopback())
+        .filter_map(|i| {
+            let if_addrs::IfAddr::V4(v4) = &i.addr else {
+                return None;
+            };
+            let desc = descriptions
+                .iter()
+                .find(|(n, _)| *n == i.name)
+                .map(|(_, d)| d.as_str())
+                .unwrap_or("");
+            is_usb_tether(&i.name, desc).then_some(v4.ip)
+        })
+        .collect()
+}
+
+/// Non-loopback IPv4 addresses of interfaces that are up: USB tethering first, then LAN.
 pub fn lan_ipv4_addresses() -> Vec<Ipv4Addr> {
     let interfaces = match if_addrs::get_if_addrs() {
         Ok(list) => list,
@@ -77,7 +142,7 @@ pub fn lan_ipv4_addresses() -> Vec<Ipv4Addr> {
             _ => None,
         })
         .collect();
-    rank_addresses(&candidates, default_route_address())
+    rank_addresses_usb_first(&candidates, default_route_address(), &usb_tether_addresses())
 }
 
 /// The local address the OS would use to reach the internet (the "main" LAN address).
@@ -124,6 +189,33 @@ mod tests {
                 Ipv4Addr::new(192, 168, 31, 56),
                 Ipv4Addr::new(192, 168, 56, 1)
             ]
+        );
+    }
+
+    #[test]
+    fn usb_tethering_goes_first() {
+        assert!(is_usb_tether(
+            "Ethernet 3",
+            "Remote NDIS based Internet Sharing Device"
+        ));
+        assert!(is_usb_tether("Ethernet 4", "Apple Mobile Device Ethernet"));
+        assert!(is_usb_tether("rndis0", ""));
+        assert!(!is_usb_tether("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz"));
+        assert!(!is_usb_tether("Ethernet", "Realtek PCIe GbE Family Controller"));
+        let c = vec![
+            ("Wi-Fi".to_string(), Ipv4Addr::new(192, 168, 1, 7)),
+            ("Ethernet 3".to_string(), Ipv4Addr::new(192, 168, 42, 33)),
+        ];
+        let usb = [Ipv4Addr::new(192, 168, 42, 33)];
+        assert_eq!(
+            rank_addresses_usb_first(&c, Some(Ipv4Addr::new(192, 168, 1, 7)), &usb),
+            vec![Ipv4Addr::new(192, 168, 42, 33), Ipv4Addr::new(192, 168, 1, 7)]
+        );
+        // A USB address that the ranking dropped (e.g. link-local) is not resurrected.
+        let usb = [Ipv4Addr::new(169, 254, 1, 1)];
+        assert_eq!(
+            rank_addresses_usb_first(&c, None, &usb),
+            vec![Ipv4Addr::new(192, 168, 1, 7), Ipv4Addr::new(192, 168, 42, 33)]
         );
     }
 

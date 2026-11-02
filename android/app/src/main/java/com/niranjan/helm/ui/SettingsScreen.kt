@@ -45,6 +45,19 @@ fun SettingsScreen(
                 }
             }
         }
+        SectionCard("App lock") {
+            Text("Lock Helm after it is in the background for")
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.niranjan.helm.core.AppLockTimer.CHOICES_MIN.forEach { m ->
+                    FilterChip(
+                        selected = settings.lockAfterMin == m,
+                        onClick = { onSettings { it.copy(lockAfterMin = m) } },
+                        label = { Text(if (m == 0) "Never" else "$m min") },
+                    )
+                }
+            }
+            Text("Unlock with fingerprint, face or screen lock. Admin actions still ask separately.", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+        }
         NotifyMirrorSettings(settings, onSettings)
         if (pcPrefs != null) {
             SectionCard("This PC on this phone") {

@@ -77,6 +77,8 @@ pub struct Config {
     pub trigger_tick: Duration,
     /// How often the Wi-Fi SSID is read for `wifi` triggers (5 s).
     pub wifi_poll: Duration,
+    /// g4: how long a pairing waits for Allow / Deny on the PC (60 s; tests shorten it).
+    pub approval_timeout: Duration,
 }
 
 impl Config {
@@ -99,6 +101,7 @@ impl Config {
             videos_dir: None,
             trigger_tick: crate::p5::TRIGGER_TICK,
             wifi_poll: crate::p5::WIFI_POLL,
+            approval_timeout: crate::g4::approval::APPROVAL_TIMEOUT,
         }
     }
 }
@@ -136,6 +139,10 @@ pub struct AppState {
     pub p3: crate::p3::P3State,
     /// Phase 5: recordings, terminals, plugins, triggers, Home Assistant.
     pub p5: crate::p5::P5State,
+    /// g4: pairing codes, "ask before a new phone pairs", host events for PC-side UIs.
+    pub g4: crate::g4::G4State,
+    /// Re-read the LAN addresses for each pairing link (USB tethering may appear later).
+    refresh_addresses: bool,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -198,6 +205,8 @@ impl AppState {
                 config.trigger_tick,
                 config.wifi_poll,
             ),
+            g4: crate::g4::G4State::new(&config.data_dir, config.approval_timeout),
+            refresh_addresses: false,
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -213,10 +222,17 @@ impl AppState {
     /// Issue a fresh one-time pairing token (the previous one stops working).
     pub fn new_pairing(&self) -> Pairing {
         let (token, expires_at) = self.lock_pairing().issue();
+        // USB tethering (g4) may have been plugged in after start: list it (first) too.
+        let fresh = if self.refresh_addresses {
+            net::lan_ipv4_addresses()
+        } else {
+            Vec::new()
+        };
+        let addresses = if fresh.is_empty() { &self.addresses } else { &fresh };
         let uri = pairing::build_uri(
             &self.identity.host_id,
             &self.identity.host_name,
-            &self.addresses,
+            addresses,
             self.port,
             &self.identity.fingerprint,
             &token,
@@ -257,6 +273,15 @@ impl AppState {
 
     pub fn router(&self) -> &Router {
         &self.router
+    }
+
+    /// Show a fresh 6-digit pairing code (g4). `Err` = code pairing is locked for that long.
+    pub fn new_code_pairing(&self) -> Result<crate::g4::CodePairing, Duration> {
+        self.g4.new_code(&self.identity.host_name)
+    }
+
+    pub(crate) fn handshake_timeout(&self) -> Duration {
+        self.handshake_timeout
     }
 
     pub(crate) fn next_stream_id(&self) -> u64 {
@@ -309,6 +334,10 @@ impl ServerHandle {
     /// Issue a fresh pairing token and return the `helm://pair` link for it.
     pub fn new_pairing(&self) -> Pairing {
         self.state.new_pairing()
+    }
+    /// Show a fresh 6-digit pairing code (g4); see [`crate::g4::G4State`] for events.
+    pub fn new_code_pairing(&self) -> Result<crate::g4::CodePairing, Duration> {
+        self.state.new_code_pairing()
     }
     pub fn devices(&self) -> anyhow::Result<Vec<Device>> {
         self.state.devices.list()
@@ -365,7 +394,9 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
     if addresses.is_empty() {
         tracing::warn!("no LAN IPv4 address found; the pairing link will have no addresses");
     }
-    let state = Arc::new(AppState::new(&config, port, addresses)?);
+    let mut state = AppState::new(&config, port, addresses)?;
+    state.refresh_addresses = config.addresses.is_none();
+    let state = Arc::new(state);
     let acceptor = tls_acceptor(&state.identity)?;
 
     let mdns = if config.enable_mdns {
@@ -699,6 +730,19 @@ fn do_pair(
             "public key or signature is invalid".into(),
         ));
     }
+    let _ = (device_name, public_key);
+    Ok((device_id.to_string(), Tier::Admin))
+}
+
+/// Store a phone that passed pairing (QR or code) and approval.
+pub(crate) fn store_paired(
+    state: &AppState,
+    peer: &str,
+    device_id: &str,
+    device_name: &str,
+    public_key: &str,
+    method: &str,
+) -> HandshakeResult {
     let now = util::now_ms();
     let device = Device {
         device_id: device_id.to_string(),
@@ -710,7 +754,6 @@ fn do_pair(
     };
     if let Err(e) = state.devices.upsert(device) {
         tracing::error!("could not save devices.json: {e:#}");
-        state.lock_pairing().restore(token, expires_at);
         return Err((
             codes::BAD_MESSAGE,
             "agent could not store the device".into(),
@@ -720,8 +763,17 @@ fn do_pair(
         "pair_ok",
         Some(device_id),
         Some(peer),
-        &format!("name={device_name}"),
+        &if method == "qr" {
+            format!("name={device_name}")
+        } else {
+            format!("name={device_name} method={method}")
+        },
     );
+    state.g4.emit(crate::g4::HostEvent::Paired {
+        device_id: device_id.to_string(),
+        device_name: device_name.to_string(),
+        method: method.to_string(),
+    });
     tracing::info!("paired new device \"{device_name}\" ({device_id}) from {peer}");
     Ok((device_id.to_string(), Tier::Admin))
 }
@@ -803,6 +855,23 @@ where
     };
     let outcome = match proto::parse_handshake(&text) {
         Err(why) => Err((codes::BAD_MESSAGE, why)),
+        // Short-code pairing (g4): same LAN-only and control-socket-only rules as `pair`.
+        Ok(Handshake::PairCode(msg)) if crate::relay::is_relayed_peer(&peer) => {
+            state
+                .audit
+                .record("pair_fail", Some(&msg.device_id), Some(&peer), "relayed");
+            Err((
+                codes::BAD_MESSAGE,
+                "pairing is only allowed on the local network".to_string(),
+            ))
+        }
+        Ok(Handshake::PairCode(_)) if !allow_pair => Err((
+            codes::BAD_MESSAGE,
+            "pairing is only allowed on the control socket".to_string(),
+        )),
+        Ok(Handshake::PairCode(msg)) => {
+            crate::g4::run_code_pairing(state, &mut ws, &peer, &nonce, msg).await
+        }
         // Pairing needs the QR code, a LAN/proximity action (PROTOCOL §12).
         Ok(Handshake::Pair { device_id, .. }) if crate::relay::is_relayed_peer(&peer) => {
             state
@@ -823,7 +892,7 @@ where
             device_name,
             public_key,
             signature,
-        }) => do_pair(
+        }) => match do_pair(
             state,
             &peer,
             &nonce,
@@ -832,7 +901,30 @@ where
             &device_name,
             &public_key,
             &signature,
-        ),
+        ) {
+            Ok(_) => match crate::g4::await_approval(
+                state,
+                &mut ws,
+                &peer,
+                &device_id,
+                &device_name,
+                &public_key,
+                "qr",
+            )
+            .await
+            {
+                Ok(()) => store_paired(state, &peer, &device_id, &device_name, &public_key, "qr"),
+                Err(f) => {
+                    state.g4.emit(crate::g4::HostEvent::PairingFailed {
+                        method: "qr".into(),
+                        peer: peer.clone(),
+                        reason: f.0.to_string(),
+                    });
+                    Err(f)
+                }
+            },
+            Err(f) => Err(f),
+        },
         Ok(Handshake::Auth {
             device_id,
             signature,
