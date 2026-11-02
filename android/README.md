@@ -19,6 +19,10 @@ colours, input line + special keys, resize on layout change; admin + biometric c
 notification mirroring (NotificationListenerService, per-app allow-list in Settings, off by
 default; toast actions and RemoteInput replies come back via `notify.action`), Plugins (enable,
 grant capabilities), Triggers editor, and Home Assistant (connection, states, `ha` deck action).
+G3 (`g3`, [`Docs/protocol/streaming-2.md`](../Docs/protocol/streaming-2.md)): window picker
+with thumbnails, gaming presets (720p/1080p at 60/120 fps, sound on), Drag mode (long-press-then-
+drag holds the left button, two-finger tap = right click), Second screen (mirror one monitor,
+view only, rotation lock), input over the `/stream` socket (`core/StreamG3.kt`, `G3Test`).
 Every p3/p4/p5 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 

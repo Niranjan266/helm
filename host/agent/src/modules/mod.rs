@@ -25,6 +25,8 @@ pub mod monitor;
 pub mod extras;
 // g6 (everyday)
 pub mod everyday;
+// G3 (Docs/protocol/streaming-2.md)
+pub mod g3;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -46,6 +48,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(extras::ExtrasModule),
         Arc::new(crate::g4::PairingModule),
         Arc::new(everyday::EverydayModule),
+        Arc::new(g3::G3Module),
     ]
 }
 

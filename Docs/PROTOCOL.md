@@ -257,6 +257,8 @@ Deck `action` = one of `{"hotkey":"ctrl+shift+esc"}`, `{"text":"…"}`, `{"launc
 - Video/audio/cursor pts share one clock starting at `stream.start`; off-monitor cursor → `visible:false`.
 - New error code `unsupported` (e.g. `record.*` until MP4 recording lands).
 - Stream keyframes may exceed 1 MiB: `/stream` binary frames are allowed up to 16 MiB.
+- Feature `g3` (window thumbnails, gaming preset, input on `/stream`, second screen):
+  [protocol/streaming-2.md](protocol/streaming-2.md).
 
 ## 11. Phase 3 — power user (feature `p3`)
 

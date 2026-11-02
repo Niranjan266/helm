@@ -33,6 +33,8 @@ mod monitors;
 mod screenshot;
 #[cfg(windows)]
 mod streamer;
+#[cfg(windows)]
+mod window;
 
 pub use config::{EncoderPreference, StreamConfig, StreamSource};
 pub use error::{Error, Result};
@@ -49,3 +51,5 @@ pub use screenshot::{
 pub use encoder::{EncoderInfo, list_h264_encoders};
 #[cfg(windows)]
 pub use streamer::{AccessUnitCallback, StreamInfo, Streamer};
+#[cfg(windows)]
+pub use window::{WindowRect, window_frame_rect, window_rgba, window_thumbnail_png, window_thumbnail_rgba};
