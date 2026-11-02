@@ -630,6 +630,15 @@ impl Platform for FakePlatform {
         Box::new(())
     }
 
+    fn window_thumbnail_png(&self, hwnd: u64, max_side: u32) -> PResult<Option<Vec<u8>>> {
+        let win = self.state().windows.iter().find(|w| w.hwnd == hwnd).cloned();
+        let Some(win) = win else {
+            return Err(RpcError::bad_params(format!("no window with handle {hwnd}")));
+        };
+        self.record(format!("window_thumbnail_png:{hwnd}:{max_side}"));
+        Ok((!win.is_minimized).then(|| TINY_PNG.to_vec()))
+    }
+
     fn start_video(
         &self,
         params: VideoParams,

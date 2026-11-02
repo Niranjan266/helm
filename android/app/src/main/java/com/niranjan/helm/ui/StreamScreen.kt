@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.niranjan.helm.core.AbsMoveBatcher
+import com.niranjan.helm.core.SecondScreen
 import com.niranjan.helm.core.ViewTransform
 import com.niranjan.helm.device.Settings
 import kotlin.math.roundToInt
@@ -61,6 +62,16 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
     val extras: ExtrasViewModel = viewModel()
     val extrasUi by extras.ui.collectAsStateWithLifecycle()
     var penMode by remember { mutableStateOf(false) }
+    val g3 by vm.g3.collectAsStateWithLifecycle()
+    val metrics = androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics
+    vm.phoneScreen = metrics.widthPixels to metrics.heightPixels
+    // G3 second screen / rotation lock: orientation follows the mirrored monitor.
+    val shownMonitor = ui.monitor ?: remoteUi.monitors.firstOrNull { it.isPrimary }
+    RotationLockEffect(
+        SecondScreen.orientation(g3.rotation, shownMonitor?.width ?: 0, shownMonitor?.height ?: 0),
+        keepScreenOn = g3.secondScreen,
+    )
+    LaunchedEffect(g3.secondScreen) { if (g3.secondScreen) showControls = false }
 
     // Stream only while this screen is visible and the app is in the foreground.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -119,6 +130,7 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 onResetView = { transform = transform.reset() },
                 onHide = { showControls = false },
             )
+            if (g3.supported) G3Controls(vm, g3, remoteUi.windows, remoteUi.monitors)
             if (remoteUi.phase5) {
                 ExtrasBar(
                     ui = extrasUi,
@@ -138,7 +150,22 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 .onSizeChanged { s: IntSize -> transform = transform.withView(s.width.toFloat(), s.height.toFloat()) }
                 .then(
                     // Pen mode: the stylus overlay owns input; finger gestures are off.
-                    if (penMode && remoteUi.phase5) Modifier else Modifier.streamGestures(
+                    if (penMode && remoteUi.phase5) {
+                        Modifier
+                    } else if (g3.secondScreen) {
+                        Modifier.viewOnlyGestures { showControls = !showControls }
+                    } else if (g3.dragMode) {
+                        Modifier.dragSelectGestures(
+                            direct = settings.streamDirectTouch,
+                            speed = settings.touchpadSpeed,
+                            haptics = settings.haptics,
+                            remote = remote,
+                            abs = absBatcher,
+                            transform = { transform },
+                            setTransform = { transform = it },
+                            onThreeFingerTap = { showControls = !showControls },
+                        )
+                    } else Modifier.streamGestures(
                         direct = settings.streamDirectTouch,
                         speed = settings.touchpadSpeed,
                         haptics = settings.haptics,

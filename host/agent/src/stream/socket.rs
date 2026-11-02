@@ -84,6 +84,14 @@ pub async fn run<S>(
         tokio::select! {
             msg = incoming.next() => match msg {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                // G3: input frames may use this socket (it skips the control socket's queue).
+                Some(Ok(Message::Text(t))) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&t)
+                        && v.get("type").and_then(Value::as_str) == Some("in")
+                    {
+                        stream.input(v);
+                    }
+                }
                 Some(Ok(_)) => {} // nothing else is expected from the phone here
             },
             _ = &mut writer, if !writer_done => {

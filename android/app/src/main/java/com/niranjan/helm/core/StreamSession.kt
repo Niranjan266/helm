@@ -67,6 +67,23 @@ class StreamSession(
 
     private var started = false
 
+    /** G3: send input frames over the `/stream` socket when the agent allows it. */
+    @Volatile
+    var inputOverStream: Boolean = true
+
+    @Volatile
+    private var ownDetour: ((InputFrame) -> Boolean)? = null
+
+    /** True while input goes over the `/stream` socket. */
+    val inputOnStream: Boolean get() = ownDetour != null && control.inputDetour === ownDetour
+
+    /** Back to the control socket (only if the detour is still ours). */
+    private fun dropDetour() {
+        val d = ownDetour ?: return
+        ownDetour = null
+        if (control.inputDetour === d) control.inputDetour = null
+    }
+
     /** Starts the stream. Returns the agent's answer; throws [HelmException] on failure. */
     suspend fun start(request: StreamRequest): StreamStartInfo {
         check(!started) { "start() may only be called once" }
@@ -88,6 +105,11 @@ class StreamSession(
                 throw HelmException(LocalCodes.CONNECTION_LOST, "Stream socket closed before stream.open.")
             }
             _state.value = StreamState.Streaming(info)
+            if (inputOverStream && info.inputOnStream && control.supportsG3) {
+                val detour: (InputFrame) -> Boolean = { f -> sc.sendText(f.toJson()) }
+                control.inputDetour = detour
+                ownDetour = detour
+            }
             scope.launch { watchSocket(sc) }
             scope.launch { statsLoop() }
             return info
@@ -111,6 +133,7 @@ class StreamSession(
 
     private suspend fun watchSocket(sc: HelmConnection) {
         val end = sc.state.first { it is ConnectionState.Failed || it is ConnectionState.Closed }
+        dropDetour()
         if (stopping) return
         _state.value = when (end) {
             is ConnectionState.Failed -> StreamState.Failed(end.code, end.message)
@@ -156,6 +179,7 @@ class StreamSession(
     suspend fun stop() {
         if (stopping) return
         stopping = true
+        dropDetour()
         val wasStreaming = _state.value is StreamState.Streaming || _state.value is StreamState.Starting
         if (wasStreaming && control.state.value is ConnectionState.Ready) {
             try {
@@ -171,6 +195,7 @@ class StreamSession(
     /** Closes without telling the PC (used when the control socket is already gone). */
     fun abandon() {
         stopping = true
+        dropDetour()
         socket?.close()
         _state.value = StreamState.Stopped
         scope.cancel()

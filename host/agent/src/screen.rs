@@ -92,7 +92,15 @@ mod live {
         fn source_rect(&self) -> Option<Rect> {
             match self.source {
                 VideoSource::Monitor(_) => self.monitor_rect,
-                VideoSource::Window(hwnd) => crate::cursor::window_rect(hwnd),
+                // The DWM frame is exactly what window capture shows (no invisible borders).
+                VideoSource::Window(hwnd) => helm_win_capture::window_frame_rect(hwnd as isize)
+                    .map(|r| Rect {
+                        x: r.x,
+                        y: r.y,
+                        width: r.width,
+                        height: r.height,
+                    })
+                    .or_else(|| crate::cursor::window_rect(hwnd)),
             }
         }
     }
@@ -125,6 +133,17 @@ mod live {
             fps: params.fps,
             bitrate_kbps: params.bitrate_kbps,
             ..StreamConfig::default()
+        };
+        // G3 gaming preset: fastest encoder setting; keyframes (big, slow to send) only every
+        // 5 s or on request, so steady frames stay small.
+        let config = if params.low_latency {
+            StreamConfig {
+                quality_vs_speed: 0,
+                gop_frames: params.fps.saturating_mul(5).clamp(60, 1200),
+                ..config
+            }
+        } else {
+            config
         };
         let monitor_rect = match &params.source {
             VideoSource::Monitor(id) => Some(
@@ -183,6 +202,22 @@ mod live {
 
 #[cfg(windows)]
 pub use live::{start_audio, start_video};
+
+/// G3 `windows.thumb`: `Ok(None)` for a minimized / hidden window.
+#[cfg(windows)]
+pub fn window_thumbnail_png(hwnd: u64, max_side: u32) -> PResult<Option<Vec<u8>>> {
+    match helm_win_capture::window_thumbnail_png(hwnd as isize, max_side) {
+        Ok(png) => Ok(Some(png)),
+        Err(helm_win_capture::Error::Unsupported(_)) => Ok(None),
+        Err(helm_win_capture::Error::InvalidConfig(m)) => Err(RpcError::bad_params(m)),
+        Err(e) => Err(RpcError::internal(e.to_string())),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn window_thumbnail_png(_hwnd: u64, _max_side: u32) -> PResult<Option<Vec<u8>>> {
+    Err(RpcError::unsupported("window thumbnails are only available on Windows"))
+}
 
 #[cfg(not(windows))]
 pub fn start_video(

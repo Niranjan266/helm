@@ -133,6 +133,9 @@ impl Platform for RealPlatform {
     ) -> PResult<Box<dyn VideoStream>> {
         crate::screen::start_video(params, sink)
     }
+    fn window_thumbnail_png(&self, hwnd: u64, max_side: u32) -> PResult<Option<Vec<u8>>> {
+        crate::screen::window_thumbnail_png(hwnd, max_side)
+    }
     fn start_audio(&self, sink: AudioSink) -> PResult<Box<dyn AudioStream>> {
         crate::screen::start_audio(sink)
     }

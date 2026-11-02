@@ -23,6 +23,14 @@ import com.niranjan.helm.core.StreamStartInfo
 import com.niranjan.helm.core.StreamState
 import com.niranjan.helm.core.StreamStatsCounter
 import com.niranjan.helm.core.StreamStatsReport
+import com.niranjan.helm.core.GamingPreset
+import com.niranjan.helm.core.HelmApi
+import com.niranjan.helm.core.RotationLock
+import com.niranjan.helm.core.SecondScreen
+import com.niranjan.helm.core.WindowEntry
+import com.niranjan.helm.core.WindowThumb
+import com.niranjan.helm.core.supportsG3
+import com.niranjan.helm.core.windowThumb
 import com.niranjan.helm.device.AudioPlayer
 import com.niranjan.helm.device.Settings
 import com.niranjan.helm.device.VideoDecoder
@@ -67,6 +75,24 @@ data class StreamUi(
     val reconnects: Int = 0,
 )
 
+/** G3 stream options (Docs/protocol/streaming-2.md). Not persisted: each visit starts plain. */
+data class G3Ui(
+    /** The PC agent speaks `g3`. */
+    val supported: Boolean = false,
+    /** Streaming one window instead of a monitor. */
+    val window: WindowEntry? = null,
+    val gaming: GamingPreset? = null,
+    /** Long-press-then-drag holds the left button. */
+    val dragMode: Boolean = false,
+    val rotation: RotationLock = RotationLock.AUTO,
+    /** Second-screen mirror: one monitor, controls hidden, view only, screen kept on. */
+    val secondScreen: Boolean = false,
+    /** Input currently travels on the `/stream` socket. */
+    val inputOnStream: Boolean = false,
+    /** Window picker thumbnails by hwnd text (null = none available). */
+    val thumbs: Map<String, Bitmap?> = emptyMap(),
+)
+
 /** Phase 2 screen stream: one [StreamSession] at a time, decoders, auto-reconnect. */
 class StreamViewModel(app: Application) : AndroidViewModel(app) {
     private val controller = (app as HelmApp).controller
@@ -74,6 +100,12 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _ui = MutableStateFlow(StreamUi())
     val ui: StateFlow<StreamUi> = _ui.asStateFlow()
+
+    private val _g3 = MutableStateFlow(G3Ui())
+    val g3: StateFlow<G3Ui> = _g3.asStateFlow()
+
+    /** Phone screen size in pixels (second-screen stream size). */
+    var phoneScreen: Pair<Int, Int> = 0 to 0
 
     private val _cursor = MutableStateFlow<CursorPos?>(null)
     val cursor: StateFlow<CursorPos?> = _cursor.asStateFlow()
@@ -149,7 +181,60 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectMonitor(m: MonitorInfo?) {
         _ui.update { it.copy(monitor = m) }
+        _g3.update { it.copy(window = null) }
         restart.tryEmit("monitor")
+    }
+
+    // ---- G3 ----
+
+    /** Stream one window (null = back to the monitor). */
+    fun selectWindow(w: WindowEntry?) {
+        _g3.update { it.copy(window = w, secondScreen = if (w != null) false else it.secondScreen) }
+        restart.tryEmit("window")
+    }
+
+    fun setGaming(p: GamingPreset?) {
+        _g3.update { it.copy(gaming = p) }
+        if (p != null) {
+            audio.enabled = true
+            controller.settings.update { it.copy(streamAudio = true) }
+        }
+        restart.tryEmit("gaming")
+    }
+
+    fun setDragMode(on: Boolean) = _g3.update { it.copy(dragMode = on) }
+
+    fun setRotation(r: RotationLock) = _g3.update { it.copy(rotation = r) }
+
+    /** Mirror monitor [m] (null = leave second-screen mode). */
+    fun setSecondScreen(m: MonitorInfo?, rotation: RotationLock = RotationLock.MATCH_MONITOR) {
+        if (m == null) {
+            _g3.update { it.copy(secondScreen = false, rotation = RotationLock.AUTO) }
+        } else {
+            _ui.update { it.copy(monitor = m) }
+            _g3.update { it.copy(secondScreen = true, window = null, gaming = null, rotation = rotation) }
+        }
+        restart.tryEmit("second-screen")
+    }
+
+    /** Loads picker thumbnails (`windows.thumb`) for [windows], a few at a time. */
+    fun loadThumbs(windows: List<WindowEntry>) {
+        val c = control ?: return
+        if (!c.supportsG3) return
+        val api = HelmApi(c)
+        viewModelScope.launch {
+            for (w in WindowThumb.pickable(windows)) {
+                val key = w.hwnd.toString()
+                if (key in _g3.value.thumbs) continue
+                val png = try {
+                    api.windowThumb(w.hwnd)
+                } catch (_: HelmException) {
+                    null
+                }
+                val bmp = png?.let { runCatching { BitmapFactory.decodeByteArray(it, 0, it.size) }.getOrNull() }
+                _g3.update { it.copy(thumbs = it.thumbs + (key to bmp)) }
+            }
+        }
     }
 
     fun setPreset(p: StreamPreset) {
@@ -188,11 +273,21 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
         val st = settings.value
         val perPc = controller.prefsFor(controller.session.value?.hostId).streamPreset
         val preset = StreamPreset.byName(perPc ?: st.streamPreset)
+        val g = _g3.value
+        val g3 = control?.supportsG3 == true
+        val m = _ui.value.monitor
         return StreamRequest(
             preset = preset,
             bitrateKbps = if (st.streamBitrateKbps > 0) st.streamBitrateKbps else preset.defaultKbps,
             audio = st.streamAudio,
-            monitorId = _ui.value.monitor?.id,
+            monitorId = m?.id,
+            hwnd = g.window?.hwnd,
+            gaming = if (g3) g.gaming else null,
+            maxSize = if (g.secondScreen && m != null && phoneScreen.first > 0) {
+                SecondScreen.mirrorSize(m.width, m.height, phoneScreen.first, phoneScreen.second)
+            } else {
+                null
+            },
         )
     }
 
@@ -214,11 +309,13 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
                 continue
             }
             _ui.update { it.copy(supported = true, status = "Starting…", error = null) }
+            _g3.update { it.copy(supported = c.supportsG3) }
             val s = StreamSession(c, controller::streamSocket, sink, stats = decoderStats)
             session = s
             val started = try {
                 val info = s.start(request())
                 _ui.update { it.copy(info = info, streaming = true, status = "Live", videoWidth = info.width, videoHeight = info.height) }
+                _g3.update { it.copy(inputOnStream = s.inputOnStream) }
                 failures = 0
                 true
             } catch (e: HelmException) {
@@ -245,6 +342,7 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
                     c.state.filter { it !is ConnectionState.Ready }.map { "control" },
                 ).first()
                 statsJob.cancel()
+                _g3.update { it.copy(inputOnStream = false) }
                 val ended = s.state.value
                 if (ended is StreamState.Failed) _ui.update { it.copy(error = ended.message) }
                 withContext(NonCancellable) { if (reason == "control") s.abandon() else s.stop() }

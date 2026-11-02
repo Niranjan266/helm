@@ -67,8 +67,26 @@ fn opt_ranged(params: &Value, name: &str, min: u64, max: u64) -> Result<Option<u
     }
 }
 
-/// Parse `stream.start` params (defaults: primary monitor, 1920×1080, 60 fps, 8000 kbit/s).
+/// Software encoders cannot keep up above this in the gaming preset (G3).
+pub const SOFTWARE_MAX_FPS: u32 = 60;
+
+/// Parse `stream.start` params (defaults: primary monitor, 1920×1080, 60 fps, 8000 kbit/s;
+/// G3 `preset:"gaming"`: 1280×720, 120 fps, 20000 kbit/s, audio on, low-latency tuning).
 pub fn parse_start(params: &Value) -> Result<(VideoParams, bool), RpcError> {
+    let gaming = match opt_str(params, "preset")? {
+        None | Some("default") => false,
+        Some("gaming") => true,
+        Some(other) => {
+            return Err(RpcError::bad_params(format!(
+                "preset must be \"default\" or \"gaming\", not {other:?}"
+            )));
+        }
+    };
+    let (dw, dh, dfps, dkbps) = if gaming {
+        (1280, 720, 120, 20_000)
+    } else {
+        (1920, 1080, 60, 8_000)
+    };
     let monitor = opt_str(params, "monitor_id")?;
     let hwnd = opt_u64(params, "hwnd")?;
     let source = match (monitor, hwnd) {
@@ -80,18 +98,19 @@ pub fn parse_start(params: &Value) -> Result<(VideoParams, bool), RpcError> {
     };
     let video = VideoParams {
         source,
-        max_width: ranged(params, "max_width", 1920, MIN_DIMENSION, MAX_DIMENSION)?,
-        max_height: ranged(params, "max_height", 1080, MIN_DIMENSION, MAX_DIMENSION)?,
-        fps: ranged(params, "fps", 60, 1, MAX_FPS)?,
+        max_width: ranged(params, "max_width", dw, MIN_DIMENSION, MAX_DIMENSION)?,
+        max_height: ranged(params, "max_height", dh, MIN_DIMENSION, MAX_DIMENSION)?,
+        fps: ranged(params, "fps", dfps, 1, MAX_FPS)?,
         bitrate_kbps: ranged(
             params,
             "bitrate_kbps",
-            8_000,
+            dkbps,
             MIN_BITRATE_KBPS,
             MAX_BITRATE_KBPS,
         )?,
+        low_latency: gaming,
     };
-    Ok((video, opt_bool(params, "audio")?.unwrap_or(false)))
+    Ok((video, opt_bool(params, "audio")?.unwrap_or(gaming)))
 }
 
 fn no_stream() -> RpcError {
@@ -169,6 +188,11 @@ impl Module for StreamModule {
                     state.stream_token_lifetime,
                 );
                 let audio = pre_skip.is_some();
+                let gaming = stream.low_latency();
+                // Gaming at > 60 fps only where the encoder allows: software falls back to 60.
+                if gaming && !stream.info().hardware && stream.info().fps > SOFTWARE_MAX_FPS {
+                    stream.reconfigure(None, Some(SOFTWARE_MAX_FPS)).await?;
+                }
                 let info = stream.info();
                 tracing::info!(
                     "stream {id} started: {}x{}@{} {} ({}), audio={audio}",
@@ -187,6 +211,8 @@ impl Module for StreamModule {
                     "encoder": if info.hardware { "hardware" } else { "software" },
                     "audio": audio,
                     "opus_pre_skip": pre_skip,
+                    "preset": if gaming { "gaming" } else { "default" },
+                    "input_on_stream": true,
                 }))
             }
             "stream.stop" => {
@@ -237,6 +263,16 @@ mod tests {
         assert_eq!(v.source, VideoSource::Monitor(None));
         assert_eq!((v.max_width, v.max_height, v.fps, v.bitrate_kbps), (1920, 1080, 60, 8000));
         assert!(!audio);
+        assert!(!v.low_latency);
+        let (v, audio) = parse_start(&json!({"preset": "gaming"})).unwrap();
+        assert_eq!((v.max_width, v.max_height, v.fps, v.bitrate_kbps), (1280, 720, 120, 20_000));
+        assert!(v.low_latency && audio);
+        let (v, audio) =
+            parse_start(&json!({"preset": "gaming", "max_height": 1080, "max_width": 1920, "audio": false}))
+                .unwrap();
+        assert_eq!((v.max_width, v.max_height, v.fps), (1920, 1080, 120));
+        assert!(v.low_latency && !audio);
+        assert!(!parse_start(&json!({"preset": "default"})).unwrap().0.low_latency);
         let (v, audio) =
             parse_start(&json!({"hwnd": 42, "fps": 30, "audio": true, "max_width": 1280})).unwrap();
         assert_eq!(v.source, VideoSource::Window(42));
@@ -250,6 +286,8 @@ mod tests {
             json!({"bitrate_kbps": 50}),
             json!({"audio": "yes"}),
             json!({"monitor_id": 3}),
+            json!({"preset": "ultra"}),
+            json!({"preset": 1}),
         ] {
             assert_eq!(parse_start(&bad).unwrap_err().code, "bad_params", "{bad}");
         }
