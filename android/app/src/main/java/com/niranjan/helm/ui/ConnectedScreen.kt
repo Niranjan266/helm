@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -98,7 +99,8 @@ fun ConnectedScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             SheetStrip(if (session.isPairing) "Sheet 00 · Pairing" else "Sheet 00 · Connection")
-            StatusCard(state, onRetry, session.isPairing, onBack)
+            val approval by session.connection.approvalPending.collectAsStateWithLifecycle()
+            StatusCard(state, onRetry, session.isPairing, onBack, approvalPending = approval)
 
             if (ready != null) {
                 PcDetails(session, ui, onPing, onRefreshInfo, onRefreshDevices, onRequestForget = { confirmForget = true }, onDisconnect = onBack)
@@ -208,12 +210,18 @@ fun ForgetDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
 }
 
 @Composable
-internal fun StatusCard(state: ConnectionState, onRetry: () -> Unit, isPairing: Boolean, onBack: () -> Unit) {
+internal fun StatusCard(
+    state: ConnectionState,
+    onRetry: () -> Unit,
+    isPairing: Boolean,
+    onBack: () -> Unit,
+    approvalPending: Boolean = false,
+) {
     InfoCard("Connection") {
         when (state) {
             ConnectionState.Idle -> Busy("Starting…")
             is ConnectionState.Connecting -> Busy("Connecting to ${state.endpoint}…")
-            ConnectionState.Pairing -> Busy("Pairing…")
+            ConnectionState.Pairing -> Busy(if (approvalPending) "Waiting for approval — choose Allow on the PC…" else "Pairing…")
             ConnectionState.Authenticating -> Busy("Signing in…")
             is ConnectionState.Ready -> {
                 KeyValue("State", "Connected")
@@ -250,7 +258,9 @@ internal fun StatusCard(state: ConnectionState, onRetry: () -> Unit, isPairing: 
 
 private fun failureTitle(code: String): String = when (code) {
     "bad_token" -> "Pairing code expired or already used. Show a new QR code on the PC."
-    "pairing_locked" -> "Too many wrong codes. Pairing is blocked for a minute."
+    "pairing_locked" -> "Too many wrong codes. Pairing is blocked for a while."
+    "bad_code" -> "The pairing code did not match. Show a new code on the PC."
+    "denied" -> "The PC did not allow this phone."
     "unknown_device" -> "This PC no longer knows this phone. Remove it and pair again."
     "bad_signature" -> "The PC rejected this phone's key."
     "timeout" -> "The PC timed out waiting for this phone."

@@ -42,6 +42,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(desktop::DesktopModule),
         Arc::new(fs::FsModule),
         Arc::new(extras::ExtrasModule),
+        Arc::new(crate::g4::PairingModule),
     ]
 }
 

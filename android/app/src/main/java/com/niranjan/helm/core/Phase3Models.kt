@@ -16,6 +16,9 @@ object Features {
     const val P3 = "p3"
     const val P4 = "p4"
     const val P5 = "p5"
+
+    /** Pairing security: short-code pairing, approve on PC (Docs/protocol/pairing-security.md). */
+    const val G4 = "g4"
 }
 
 private fun JsonObject.floats(k: String): List<Float> =

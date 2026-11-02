@@ -28,7 +28,9 @@ OPTIONS:
     -h, --help          show this help
     -V, --version       show the version
 
-While running, type  p + Enter  for a fresh pairing QR,  q + Enter  to quit.
+While running, type  p + Enter  for a fresh pairing QR,  c + Enter  for a 6-digit
+pairing code (when the phone camera can't scan),  y / n + Enter  to allow / deny a
+waiting phone,  ask on / ask off  to ask before new phones pair,  q + Enter  to quit.
 The tray icon menu offers the same (plus Paired devices, Start with Windows and
 Check for updates). Updates are only checked and verified, never installed silently.";
 
@@ -168,6 +170,76 @@ fn show_pairing(server: &ServerHandle) -> std::path::PathBuf {
     svg_path
 }
 
+/// Show a 6-digit pairing code (g4) and return the text shown, or why there is none.
+fn show_code(server: &ServerHandle) -> String {
+    match server.new_code_pairing() {
+        Ok(c) => {
+            let text = format!(
+                "Pairing code for {}:  {}\nOn the phone: Nearby PCs -> {} -> type the code. \
+                 Valid 5 min, one try.",
+                c.host_name,
+                helm_agent::g4::code::display_code(&c.code),
+                c.host_name
+            );
+            println!("\n{text}\n");
+            text
+        }
+        Err(left) => {
+            let text = format!(
+                "Code pairing is locked after wrong codes; try again in {} min (or use the QR).",
+                left.as_secs().div_ceil(60)
+            );
+            println!("{text}");
+            text
+        }
+    }
+}
+
+/// Console answer to a waiting pairing request (oldest first).
+fn answer_pairing(server: &ServerHandle, allow: bool) {
+    let g4 = &server.state().g4;
+    match g4.pending().first() {
+        Some(p) => {
+            g4.resolve(p.request_id, allow);
+            println!(
+                "{} \"{}\".",
+                if allow { "Allowed" } else { "Denied" },
+                p.device_name
+            );
+        }
+        None => println!("No phone is waiting for approval."),
+    }
+}
+
+/// Print host events (g4) that need the console user's attention.
+fn print_host_event(ev: &helm_agent::g4::HostEvent) {
+    use helm_agent::g4::HostEvent;
+    match ev {
+        HostEvent::PairingRequest(p) => println!(
+            "\nPhone \"{}\" ({}) wants to pair. Type y + Enter to allow, n + Enter to deny \
+             ({} s).",
+            p.device_name,
+            p.peer,
+            ((p.expires_unix_ms - helm_agent::util::now_ms()).max(0) / 1000)
+        ),
+        HostEvent::PairingResolved { outcome, .. } => {
+            println!("Pairing request: {}", outcome.as_str())
+        }
+        HostEvent::PairingFailed { method, reason, .. } => {
+            println!("Pairing ({method}) failed: {reason}")
+        }
+        HostEvent::PairingLocked { .. } => {
+            println!("Code pairing locked for 10 minutes after repeated wrong codes.")
+        }
+        HostEvent::Paired {
+            device_name,
+            method,
+            ..
+        } => println!("Paired \"{device_name}\" ({method})."),
+        _ => {}
+    }
+}
+
 /// Open a file or folder with its default app (browser for the QR SVG, Explorer for folders).
 async fn open_with_shell(path: std::path::PathBuf) {
     let shown = path.display().to_string();
@@ -305,7 +377,12 @@ async fn run(args: Args) -> anyhow::Result<()> {
     );
     println!("  Fingerprint:  {}", server.fingerprint());
     println!("  Data folder:  {}", server.data_dir().display());
-    println!("  Commands:     p + Enter = new pairing QR, q + Enter = quit, Ctrl+C = quit");
+    println!(
+        "  Commands:     p + Enter = new pairing QR, c + Enter = pairing code, q + Enter = quit"
+    );
+    if server.state().g4.settings().require_approval {
+        println!("  New phones:   must be allowed on this PC (ask off + Enter to stop asking)");
+    }
 
     let paired = server.devices().map(|d| d.len()).unwrap_or(0);
     if paired == 0 || args.pair {
@@ -356,6 +433,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
 
     startup_update_check();
 
+    let mut host_events = server.state().g4.subscribe();
     let mut stdin_open = true;
     loop {
         tokio::select! {
@@ -364,11 +442,27 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 Some("p") | Some("pair") => {
                     show_pairing(&server);
                 }
+                Some("c") | Some("code") => {
+                    show_code(&server);
+                }
+                Some("y") | Some("allow") => answer_pairing(&server, true),
+                Some("n") | Some("deny") => answer_pairing(&server, false),
+                Some(cmd @ ("ask on" | "ask off")) => {
+                    match server.state().g4.set_require_approval(cmd == "ask on") {
+                        Ok(s) => println!("Ask before a new phone pairs: {}", if s.require_approval { "on" } else { "off" }),
+                        Err(e) => eprintln!("could not save the setting: {e:#}"),
+                    }
+                }
                 Some("q") | Some("quit") | Some("exit") => break,
                 Some("") => {}
-                Some(other) => println!("unknown command {other:?} (p = pair, q = quit)"),
+                Some(other) => println!("unknown command {other:?} (p = pair, c = code, q = quit)"),
                 // stdin closed (no console): keep serving until Ctrl+C or tray Quit.
                 None => stdin_open = false,
+            },
+            ev = host_events.recv() => match ev {
+                Ok(ev) => print_host_event(&ev),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
             },
             Some(cmd) = tray_rx.recv() => {
                 #[cfg(windows)]
@@ -378,6 +472,12 @@ async fn run(args: Args) -> anyhow::Result<()> {
                         TrayCommand::ShowPairing => {
                             let svg = show_pairing(&server);
                             open_with_shell(svg).await;
+                        }
+                        TrayCommand::ShowPairingCode => {
+                            let text = show_code(&server);
+                            tokio::task::spawn_blocking(move || {
+                                helm_agent::desktop::message_box("Helm pairing code", &text, false)
+                            });
                         }
                         TrayCommand::PairedDevices => {
                             open_with_shell(server.data_dir().to_path_buf()).await;

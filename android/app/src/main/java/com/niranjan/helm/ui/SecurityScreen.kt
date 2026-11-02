@@ -32,6 +32,7 @@ fun SecurityScreen(main: MainViewModel, power: PowerViewModel) {
     val ui by power.ui.collectAsStateWithLifecycle()
     val gate = LocalAdminGate.current
     LaunchedEffect(ui.phase4) { if (ui.phase4) power.loadRelay() }
+    LaunchedEffect(ui.g4) { if (ui.g4) power.loadPairApproval() }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionCard("Paired devices") {
@@ -56,6 +57,19 @@ fun SecurityScreen(main: MainViewModel, power: PowerViewModel) {
                 }
             }
             OutlineButton(onClick = main::refreshDevices) { Text("Refresh") }
+        }
+        if (ui.g4) {
+            SectionCard("New phones") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Ask on the PC before a new phone pairs", Modifier.weight(1f))
+                    Switch(
+                        checked = ui.pairApproval == true,
+                        enabled = ui.pairApproval != null,
+                        onCheckedChange = { v -> gate("Change the pairing setting") { power.setPairApproval(v) } },
+                    )
+                }
+                HintText("When on, the PC shows Allow / Deny for 60 seconds; no answer means deny.")
+            }
         }
         if (ui.phase3) {
             SectionCard("Audit log") {

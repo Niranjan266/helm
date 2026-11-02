@@ -28,6 +28,8 @@ data class Settings(
     val mirrorNotifications: Boolean = false,
     /** Package names allowed to mirror; empty = none. */
     val mirrorApps: Set<String> = emptySet(),
+    /** g4: lock Helm after this many minutes in the background; 0 = never (default). */
+    val lockAfterMin: Int = 0,
 )
 
 /** Phone-local preferences (not synced to the PC). */
@@ -49,6 +51,7 @@ class AppSettings(context: Context) {
         streamShowStats = prefs.getBoolean("st_stats", false),
         mirrorNotifications = prefs.getBoolean("nm_on", false),
         mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
+        lockAfterMin = prefs.getInt("lock_min", 0).coerceAtLeast(0),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -66,6 +69,7 @@ class AppSettings(context: Context) {
             .putBoolean("st_stats", s.streamShowStats)
             .putBoolean("nm_on", s.mirrorNotifications)
             .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))
+            .putInt("lock_min", s.lockAfterMin)
             .apply()
         _settings.value = s
     }
