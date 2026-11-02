@@ -56,7 +56,7 @@ icon. **Closing the window keeps Helm running in the tray**, so phones stay conn
 tray's **Quit Helm** to stop it. *Start with Windows* (Settings) starts it hidden in the tray.
 Windows 11 already has the WebView2 runtime it needs.
 
-**Android** — download `Helm-android-debug.apk` from
+**Android** — download `Helm-android.apk` from
 [Releases](https://github.com/Niranjan266/helm/releases) and install it.
 
 ## Quick start (developers)
