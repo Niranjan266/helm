@@ -6,6 +6,10 @@ deck, clipboard, file transfer, screenshots and live events.
 Phase 2 (`features:["p1","p2"]`): live screen (H.264) + system audio (Opus) + cursor overlay on
 a second `/stream` socket, adaptive bitrate, direct-touch `ma` input.
 
+G3 (`g3`, [`Docs/protocol/streaming-2.md`](../../Docs/protocol/streaming-2.md)): window
+streams with `windows.thumb` picker thumbnails, `stream.start{preset:"gaming"}`, `in` frames on
+the `/stream` socket (`cargo test --test g3 -- --nocapture` prints the latency comparison).
+
 Phase 4 (`p4`): relay tunnel for access from anywhere, `relay.get`/`relay.set`, `wol.send`,
 gyro air mouse (`gy` input). Phase 5: signed update check, clean start under `helm-service`.
 The wire contract is [`Docs/PROTOCOL.md`](../../Docs/PROTOCOL.md).

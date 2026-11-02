@@ -35,11 +35,15 @@ data class StreamRequest(
     val audio: Boolean = true,
     val monitorId: JsonPrimitive? = null,
     val hwnd: JsonPrimitive? = null,
+    /** G3: the gaming preset replaces size, fps and bitrate (agent `preset:"gaming"`). */
+    val gaming: GamingPreset? = null,
+    /** G3 second screen: cap the stream size (e.g. to the phone's screen). */
+    val maxSize: Pair<Int, Int>? = null,
 ) {
-    fun toParams(): JsonObject = buildJsonObject {
+    fun toParams(): JsonObject = gaming?.toParams(monitorId, hwnd) ?: buildJsonObject {
         if (hwnd != null) put("hwnd", hwnd) else if (monitorId != null) put("monitor_id", monitorId)
-        put("max_width", preset.maxWidth)
-        put("max_height", preset.maxHeight)
+        put("max_width", maxSize?.first?.coerceIn(64, preset.maxWidth) ?: preset.maxWidth)
+        put("max_height", maxSize?.second?.coerceIn(64, preset.maxHeight) ?: preset.maxHeight)
         put("fps", preset.fps)
         put("bitrate_kbps", StreamPreset.clampKbps(bitrateKbps))
         put("audio", audio)
@@ -54,6 +58,10 @@ data class StreamStartInfo(
     val fps: Int,
     val codec: String,
     val encoder: String,
+    /** G3: `"gaming"` or `"default"` (older agents: `"default"`). */
+    val preset: String = "default",
+    /** G3: the agent accepts `in` frames on the `/stream` socket. */
+    val inputOnStream: Boolean = false,
 ) {
     companion object {
         fun from(r: JsonObject): StreamStartInfo? {
@@ -65,6 +73,8 @@ data class StreamStartInfo(
                 fps = (r.optLong("fps") ?: 0).toInt(),
                 codec = r.optStr("codec") ?: "h264",
                 encoder = r.optStr("encoder") ?: "unknown",
+                preset = r.optStr("preset") ?: "default",
+                inputOnStream = r.optBool("input_on_stream") == true,
             )
         }
     }

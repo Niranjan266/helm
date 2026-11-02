@@ -11,6 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -99,6 +100,12 @@ class FakeAgent(
 
     /** Tokens accepted by `stream.open` on the `/stream` socket. */
     val streamOpened = CopyOnWriteArrayList<String>()
+
+    /** G3: `in` frames received on the `/stream` socket, in order. */
+    val streamInputs = CopyOnWriteArrayList<JsonObject>()
+
+    /** G3: `windows.thumb` params received, in order. */
+    val thumbCalls = CopyOnWriteArrayList<JsonObject>()
 
     /** Paths of every WebSocket the agent accepted (`/ws`, `/stream`). */
     val paths = CopyOnWriteArrayList<String>()
@@ -227,6 +234,7 @@ class FakeAgent(
                         streamSockets += webSocket
                         for (f in streamFrames) webSocket.send(f.toByteString())
                     }
+                    "in" -> if (authed && "g3" in features.orEmpty()) streamInputs += msg else error(webSocket, "bad_message", "unexpected on /stream")
                     else -> error(webSocket, "bad_message", "unexpected on /stream")
                 }
                 return
@@ -404,7 +412,20 @@ class FakeAgent(
                         put("fps", (params["fps"] as? JsonPrimitive)?.longOrNull ?: 30)
                         put("codec", "h264")
                         put("encoder", "software")
+                        if ("g3" in features.orEmpty()) {
+                            put("preset", (params["preset"] as? JsonPrimitive)?.contentOrNull ?: "default")
+                            put("input_on_stream", true)
+                        }
                     })
+                }
+                "windows.thumb" -> {
+                    thumbCalls += params
+                    val hwnd = (params["hwnd"] as? JsonPrimitive)?.longOrNull
+                    when (hwnd) {
+                        null -> reqError(ws, id, "bad_params", "hwnd required")
+                        2L -> ok(ws, id, buildJsonObject { put("png", JsonNull) }) // minimized
+                        else -> ok(ws, id, buildJsonObject { put("png", Base64.getEncoder().encodeToString(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47))) })
+                    }
                 }
                 "stream.stats" -> {
                     streamStats += params

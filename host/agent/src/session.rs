@@ -221,10 +221,16 @@ impl Session {
             ) else {
                 return Self::report_input_error(&self.tx, &self.input_error, "bad_params");
             };
-            let Some(rect) = self.pointer_rect(platform) else {
-                return Self::report_input_error(&self.tx, &self.input_error, "internal");
+            let mapped = self.stream().and_then(|s| s.map_normalized(x, y));
+            let (px, py) = match mapped {
+                Some(p) => p,
+                None => {
+                    let Some(rect) = self.pointer_rect(platform) else {
+                        return Self::report_input_error(&self.tx, &self.input_error, "internal");
+                    };
+                    crate::stream::normalized_to_desktop(x, y, rect)
+                }
             };
-            let (px, py) = crate::stream::normalized_to_desktop(x, y, rect);
             InputCmd::MoveTo(px, py)
         } else {
             match serde_json::from_value(gyro_as_move(frame)) {

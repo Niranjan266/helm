@@ -225,6 +225,7 @@ fn main() -> ExitCode {
         gop_frames: 120,
         repeat_idle_frames: args.repeat,
         encoder: args.encoder,
+        ..StreamConfig::default()
     };
     let sink = file.clone();
     let keyframe_pts = Arc::new(Mutex::new(Vec::<u64>::new()));

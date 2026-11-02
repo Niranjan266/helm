@@ -637,12 +637,20 @@ class HelmConnection(
      * Returns false when not connected or the socket is closing.
      */
     fun sendInput(frame: InputFrame): Boolean {
+        inputDetour?.let { if (it(frame)) return true } // G3: input over the /stream socket
         val ws = socket ?: return false
         if (_state.value !is ConnectionState.Ready) return false
         return ws.send(frame.toJson().toString())
     }
 
     /** Sends one raw JSON text frame (e.g. `stream.open`, §10). Returns false when not connected. */
+    /**
+     * G3: while set, [sendInput] first offers each frame here (the running stream's `/stream`
+     * socket); `false` falls back to this connection.
+     */
+    @Volatile
+    var inputDetour: ((InputFrame) -> Boolean)? = null
+
     fun sendText(obj: JsonObject): Boolean {
         val ws = socket ?: return false
         if (_state.value !is ConnectionState.Ready) return false

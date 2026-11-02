@@ -377,6 +377,33 @@ pub fn normalized_to_desktop(nx: f64, ny: f64, rect: Rect) -> (i32, i32) {
     (axis(nx, rect.x, rect.width), axis(ny, rect.y, rect.height))
 }
 
+/// G3: a point normalised to the encoded **picture** (0..1, clamped) → virtual-desktop pixel,
+/// undoing the letterbox (inverse of [`desktop_to_stream`]). Points on the black bars clamp
+/// to the nearest source edge. Used for window streams, whose aspect ratio changes when the
+/// window is resized while the encoded size stays fixed.
+pub fn picture_to_desktop(nx: f64, ny: f64, rect: Rect, width: u32, height: u32) -> (i32, i32) {
+    if rect.width == 0 || rect.height == 0 || width == 0 || height == 0 {
+        return normalized_to_desktop(nx, ny, rect);
+    }
+    let (sw, sh, dw, dh) = (
+        rect.width as f64,
+        rect.height as f64,
+        width as f64,
+        height as f64,
+    );
+    let scale = f64::min(dw / sw, dh / sh);
+    let (left, top) = ((dw - sw * scale) / 2.0, (dh - sh * scale) / 2.0);
+    let axis = |n: f64, offset: f64, d: f64, s: f64, origin: i32| -> i32 {
+        let n = if n.is_finite() { n.clamp(0.0, 1.0) } else { 0.0 };
+        let src = ((n * d - offset) / scale).floor().clamp(0.0, s - 1.0);
+        origin + src as i32
+    };
+    (
+        axis(nx, left, dw, sw, rect.x),
+        axis(ny, top, dh, sh, rect.y),
+    )
+}
+
 /// Virtual-desktop pixel → stream picture pixel (`width × height`, source letterboxed and
 /// centred like the encoder does). The bool says whether the point is on the source.
 pub fn desktop_to_stream(x: i32, y: i32, rect: Rect, width: u32, height: u32) -> (i32, i32, bool) {
@@ -575,5 +602,29 @@ mod tests {
         // 16:9 source in a 4:3 picture: letterboxed top/bottom.
         let (x, y, inside) = desktop_to_stream(-1920, 0, r, 1024, 768);
         assert_eq!((x, y, inside), (0, 96, true));
+    }
+
+    #[test]
+    fn picture_to_desktop_undoes_the_letterbox() {
+        // Window 800x800 shown in a 1280x720 picture: pillarbox 280 px each side, scale 0.9.
+        let r = Rect { x: 100, y: 50, width: 800, height: 800 };
+        assert_eq!(picture_to_desktop(0.5, 0.5, r, 1280, 720), (500, 450));
+        assert_eq!(picture_to_desktop(0.0, 0.0, r, 1280, 720), (100, 50)); // on the bar → edge
+        assert_eq!(picture_to_desktop(1.0, 1.0, r, 1280, 720), (899, 849));
+        // Left edge of the picture content (x = 280 px) is the window's left edge.
+        assert_eq!(picture_to_desktop(280.0 / 1280.0, 0.0, r, 1280, 720).0, 100);
+        // Round trip with desktop_to_stream for points on the source.
+        for (x, y) in [(100, 50), (333, 777), (899, 849), (500, 450)] {
+            let (px, py, inside) = desktop_to_stream(x, y, r, 1280, 720);
+            assert!(inside);
+            let (bx, by) =
+                picture_to_desktop((px as f64 + 0.5) / 1280.0, (py as f64 + 0.5) / 720.0, r, 1280, 720);
+            assert!((bx - x).abs() <= 1 && (by - y).abs() <= 1, "({x},{y}) -> ({px},{py}) -> ({bx},{by})");
+        }
+        // Same aspect = plain mapping; degenerate sizes fall back; NaN clamps to 0.
+        let m = Rect { x: -1920, y: 0, width: 1920, height: 1080 };
+        assert_eq!(picture_to_desktop(0.5, 0.5, m, 1280, 720), (-960, 540));
+        assert_eq!(picture_to_desktop(f64::NAN, 2.0, m, 1280, 720), (-1920, 1079));
+        assert_eq!(picture_to_desktop(0.5, 0.5, m, 0, 0), normalized_to_desktop(0.5, 0.5, m));
     }
 }

@@ -44,6 +44,8 @@ pub struct StreamConfig {
     /// refine a static image). When false, idle screens produce no output.
     pub repeat_idle_frames: bool,
     pub encoder: EncoderPreference,
+    /// `CODECAPI_AVEncCommonQualityVsSpeed` 0..=100 (0 = fastest, lowest latency). Default 33.
+    pub quality_vs_speed: u32,
 }
 
 impl Default for StreamConfig {
@@ -57,6 +59,7 @@ impl Default for StreamConfig {
             gop_frames: 120,
             repeat_idle_frames: true,
             encoder: EncoderPreference::Auto,
+            quality_vs_speed: 33,
         }
     }
 }
@@ -87,6 +90,9 @@ impl StreamConfig {
         }
         if self.gop_frames == 0 || self.gop_frames > 100_000 {
             return bad(format!("gop_frames = {}, must be 1..=100000", self.gop_frames));
+        }
+        if self.quality_vs_speed > 100 {
+            return bad(format!("quality_vs_speed = {}, must be 0..=100", self.quality_vs_speed));
         }
         match &self.source {
             StreamSource::Monitor(id) if id.is_empty() => bad("monitor id is empty".into()),
@@ -156,6 +162,7 @@ mod tests {
             StreamConfig { max_width: 10, ..base.clone() },
             StreamConfig { max_height: 100_000, ..base.clone() },
             StreamConfig { bitrate_kbps: 1, ..base.clone() },
+            StreamConfig { quality_vs_speed: 101, ..base.clone() },
             StreamConfig { bitrate_kbps: 1_000_000, ..base.clone() },
             StreamConfig { gop_frames: 0, ..base.clone() },
             StreamConfig { source: StreamSource::Monitor(String::new()), ..base.clone() },
