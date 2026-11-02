@@ -1,0 +1,240 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helm</title>
+<link rel="stylesheet" href="styles.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" width="28" height="28" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <rect x="6" y="6" width="7" height="36" rx="3.5" fill="currentColor"/>
+        <rect x="35" y="6" width="7" height="36" rx="3.5" fill="currentColor"/>
+        <g stroke="currentColor" stroke-width="3" stroke-linecap="round">
+          <circle cx="24" cy="24" r="7.5"/>
+          <line x1="13" y1="24" x2="16.5" y2="24"/>
+          <line x1="31.5" y1="24" x2="35" y2="24"/>
+          <line x1="24" y1="13" x2="24" y2="16.5"/>
+          <line x1="24" y1="31.5" x2="24" y2="35"/>
+        </g>
+        <circle cx="24" cy="24" r="2.2" fill="currentColor"/>
+        <circle cx="24" cy="11" r="2.2" fill="currentColor"/>
+        <circle cx="24" cy="37" r="2.2" fill="currentColor"/>
+      </svg>
+      <span class="word">Helm</span>
+      <span class="rev">AGENT · REV<br><span id="rev">—</span></span>
+    </div>
+    <nav class="nav" aria-label="Main">
+      <a href="#home" data-page="home">Home</a>
+      <a href="#phones" data-page="phones">Phones</a>
+      <a href="#pair" data-page="pair">Pair</a>
+      <a href="#activity" data-page="activity">Activity</a>
+      <a href="#settings" data-page="settings">Settings</a>
+    </nav>
+    <span class="pill" id="pill" data-tone="wait"><span class="dot"></span><span id="pill-text">Starting</span></span>
+  </header>
+
+  <div class="sheetbar">
+    <span id="sheet">Sheet 01 · This PC</span>
+    <span class="hint">Closing the window keeps Helm in the tray</span>
+  </div>
+
+  <!-- ============================================================ HOME -->
+  <main class="page" id="page-home">
+    <section class="col col-left">
+      <span class="badge"><span class="num">#1</span><span id="home-badge">Warming up</span></span>
+      <h1 class="host"><span id="host-first"></span><span class="hl" id="host-rest">—</span></h1>
+      <p class="bubble" id="home-message">Starting Helm…</p>
+      <div class="actions-row" id="home-actions" hidden>
+        <button type="button" class="btn btn-primary" data-action="resume">Resume connections</button>
+      </div>
+
+      <table class="details">
+        <tbody>
+          <tr>
+            <td><span class="k">Address</span><span class="v" id="d-address">—</span></td>
+            <td><span class="k">Port</span><span class="v" id="d-port">—</span></td>
+            <td><span class="k">Uptime</span><span class="v" id="d-uptime">—</span></td>
+          </tr>
+          <tr>
+            <td><span class="k">Phones</span><span class="v" id="d-phones">—</span></td>
+            <td><span class="k">Link</span><span class="v">TLS · pinned</span></td>
+            <td><span class="k">Relay</span><span class="v" id="d-relay">—</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="card">
+        <div class="card-head"><span>Fig. 2 · Phones</span><a href="#phones" data-page="phones" class="head-link">All phones</a></div>
+        <div id="home-phones"></div>
+      </div>
+    </section>
+
+    <section class="col col-right">
+      <div class="card">
+        <div class="card-head"><span>Fig. 1 · Pair a phone</span><span class="expires" data-expires>—</span></div>
+        <div class="pair-body">
+          <div class="qr" role="img" aria-label="Pairing QR code" data-qr></div>
+          <div class="pair-side">
+            <p class="pair-help">Open Helm on the phone → <strong>Pair with QR</strong> → scan. The code works once.</p>
+            <button type="button" class="btn btn-primary" data-action="new-code">New code</button>
+            <button type="button" class="btn btn-ghost" data-action="copy-link">Copy link</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mono-card">
+        <div class="card-head"><span>Log</span><a href="#activity" data-page="activity" class="head-link">Activity</a></div>
+        <div class="log" id="home-log"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================================================ PHONES -->
+  <main class="page" id="page-phones" hidden>
+    <section class="col col-wide">
+      <span class="badge"><span class="num">#2</span>Trusted phones</span>
+      <h1 class="title">Phones</h1>
+      <p class="lede">Each phone signs in with its own key. <strong>Admin</strong> can do everything,
+        <strong>Remote</strong> can control the PC but not change settings, <strong>Viewer</strong> can only look.
+        Changing access makes the phone reconnect. Revoked phones must pair again.</p>
+      <div class="card">
+        <div class="card-head"><span>Fig. 3 · Paired phones</span><span id="phones-count"></span></div>
+        <div id="phones-list"></div>
+      </div>
+      <div class="actions-row">
+        <a href="#pair" data-page="pair" class="btn btn-primary">Pair another phone</a>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================================================ PAIR -->
+  <main class="page" id="page-pair" hidden>
+    <section class="col col-left">
+      <span class="badge"><span class="num">#3</span>Pair a phone</span>
+      <h1 class="title">Scan to pair</h1>
+      <ol class="steps">
+        <li><span class="step-n">1</span>Install Helm on your Android phone and open it.</li>
+        <li><span class="step-n">2</span>Tap <strong>Pair with QR</strong> and point the camera at this code.</li>
+        <li><span class="step-n">3</span>Done. The phone remembers this PC; no PIN next time.</li>
+      </ol>
+      <p class="note">Same Wi-Fi network needed for the first pairing. Windows may ask to allow Helm on
+        <strong>Private</strong> networks; allow it. A code works once and expires after 5 minutes.</p>
+    </section>
+    <section class="col col-right">
+      <div class="card">
+        <div class="card-head"><span>Fig. 4 · Pairing code</span><span class="expires" data-expires>—</span></div>
+        <div class="pair-body pair-big">
+          <div class="qr qr-big" role="img" aria-label="Pairing QR code" data-qr></div>
+          <div class="pair-side">
+            <button type="button" class="btn btn-primary" data-action="new-code">New code</button>
+            <button type="button" class="btn btn-ghost" data-action="copy-link">Copy link</button>
+          </div>
+        </div>
+        <div class="uri" id="pair-uri" title="Pairing link"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================================================ ACTIVITY -->
+  <main class="page" id="page-activity" hidden>
+    <section class="col col-wide">
+      <span class="badge"><span class="num">#4</span>Audit log</span>
+      <h1 class="title">Activity</h1>
+      <p class="lede">Security events from <span class="mono">audit.log</span>: pairings, sign-ins, refusals,
+        access changes and file transfers. Newest first.</p>
+      <div class="card mono-card">
+        <div class="card-head"><span>Fig. 5 · Last 200 events</span><button type="button" class="link-btn" data-action="refresh-activity">Refresh</button></div>
+        <div class="table-wrap">
+          <table class="grid-table">
+            <thead><tr><th>Time</th><th>Event</th><th>Phone</th><th>From</th><th>Detail</th></tr></thead>
+            <tbody id="activity-rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================================================ SETTINGS -->
+  <main class="page" id="page-settings" hidden>
+    <section class="col col-left">
+      <span class="badge"><span class="num">#5</span>Settings</span>
+      <h1 class="title">Settings</h1>
+
+      <div class="card">
+        <div class="card-head"><span>Startup</span></div>
+        <div class="card-body">
+          <label class="switch-row">
+            <input type="checkbox" id="s-autostart">
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>Start with Windows</strong><br><span class="muted">Helm starts in the tray when you sign in, so phones can connect right away.</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span>Connections</span><span id="s-run"></span></div>
+        <div class="card-body form">
+          <label for="s-port">Port <span class="muted">(0 = any free port; Helm restarts)</span></label>
+          <div class="inline">
+            <input id="s-port" type="number" min="0" max="65535" inputmode="numeric">
+            <button type="button" class="btn btn-ghost" data-action="save-port">Save</button>
+          </div>
+          <div class="inline">
+            <button type="button" class="btn btn-ghost" id="s-pause" data-action="toggle-pause">Pause connections</button>
+          </div>
+          <p class="muted">Paused: Helm stays in the tray but phones cannot connect.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span>Relay · use away from home</span><span id="s-relay-state"></span></div>
+        <div class="card-body form">
+          <label class="check"><input type="checkbox" id="s-relay-on"> Connect through a relay</label>
+          <label for="s-relay-url">Relay URL</label>
+          <div class="inline">
+            <input id="s-relay-url" type="url" placeholder="wss://relay.example.com" spellcheck="false">
+            <button type="button" class="btn btn-ghost" data-action="save-relay">Save</button>
+          </div>
+          <p class="muted">Traffic stays end-to-end encrypted; the relay only forwards it.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="col col-right">
+      <div class="card">
+        <div class="card-head"><span>Updates</span></div>
+        <div class="card-body form">
+          <p id="u-summary" class="muted">Helm never installs updates by itself.</p>
+          <div class="inline">
+            <button type="button" class="btn btn-primary" data-action="check-updates">Check for updates</button>
+            <button type="button" class="btn btn-ghost" data-action="download-update" id="u-download" hidden>Download &amp; verify</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mono-card">
+        <div class="card-head"><span>About this PC</span></div>
+        <div class="card-body kv">
+          <span class="k">Version</span><span id="a-version">—</span>
+          <span class="k">PC name</span><span id="a-host">—</span>
+          <span class="k">Host id</span><span id="a-hostid">—</span>
+          <span class="k">Fingerprint</span><span id="a-fp" class="wrap-any">—</span>
+          <span class="k">Data folder</span><span id="a-data" class="wrap-any">—</span>
+        </div>
+        <div class="card-body inline">
+          <button type="button" class="btn btn-ghost" data-action="open-data">Open data folder</button>
+          <button type="button" class="btn btn-ghost" data-action="quit">Quit Helm</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</div>
+</body>
+</html>

@@ -6,6 +6,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use tokio::sync::broadcast;
+
 use crate::util;
 
 pub const AUDIT_FILE: &str = "audit.log";
@@ -13,6 +15,8 @@ pub const AUDIT_FILE: &str = "audit.log";
 pub struct AuditLog {
     path: PathBuf,
     lock: Mutex<()>,
+    /// Every recorded line (without the newline), for in-process listeners (the desktop app).
+    lines: broadcast::Sender<String>,
 }
 
 fn clean(field: &str) -> String {
@@ -29,7 +33,14 @@ impl AuditLog {
         AuditLog {
             path: data_dir.join(AUDIT_FILE),
             lock: Mutex::new(()),
+            lines: broadcast::channel(256).0,
         }
+    }
+
+    /// Receive each line as it is recorded (same format as the file, no trailing newline).
+    /// Slow receivers miss lines (`RecvError::Lagged`); the file stays complete.
+    pub fn subscribe(&self) -> broadcast::Receiver<String> {
+        self.lines.subscribe()
     }
 
     /// Record an event. Failures to write are logged, never fatal.
@@ -55,6 +66,10 @@ impl AuditLog {
         if let Err(e) = result {
             tracing::warn!("could not write audit log {}: {e}", self.path.display());
         }
+        drop(_guard);
+        line.pop();
+        // No receivers is normal (console agent).
+        let _ = self.lines.send(line);
     }
 }
 
@@ -89,6 +104,18 @@ mod tests {
         assert_eq!(t.len(), 2);
         assert!(t[0].ends_with("n=3") && t[1].ends_with("n=4"));
         assert_eq!(log.tail(100).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn subscribers_get_each_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = AuditLog::new(dir.path());
+        let mut rx = log.subscribe();
+        log.record("revoke", Some("dev"), Some("ui"), "by=desktop");
+        let line = rx.try_recv().unwrap();
+        assert!(line.ends_with("\trevoke\tdev\tui\tby=desktop"));
+        assert!(!line.ends_with('\n'));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

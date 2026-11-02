@@ -486,3 +486,27 @@ async fn wrong_path_and_wrong_pin_fail() {
     );
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn connection_and_audit_events_reach_subscribers() {
+    use helm_agent::AgentEvent;
+    let dir = tempfile::tempdir().unwrap();
+    let server = start(dir.path()).await;
+    let mut events = server.subscribe();
+    let mut audit = server.state().audit.subscribe();
+    let phone = Phone::new("Events");
+    let (ws, r) = phone.pair(&server, &server.new_pairing().token).await;
+    assert_eq!(r["type"], "ready");
+    let wait = Duration::from_secs(5);
+    let connected = tokio::time::timeout(wait, events.recv()).await.unwrap().unwrap();
+    let AgentEvent::Connected { session_id, device_id, peer, .. } = connected else {
+        panic!("expected Connected, got {connected:?}");
+    };
+    assert!(peer.starts_with("127.0.0.1:"));
+    let line = tokio::time::timeout(wait, audit.recv()).await.unwrap().unwrap();
+    assert!(line.contains("\tpair_ok\t"), "{line}");
+    drop(ws);
+    let gone = tokio::time::timeout(wait, events.recv()).await.unwrap().unwrap();
+    assert_eq!(gone, AgentEvent::Disconnected { session_id, device_id });
+    server.shutdown().await;
+}
