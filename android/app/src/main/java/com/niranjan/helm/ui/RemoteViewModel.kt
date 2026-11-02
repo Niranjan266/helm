@@ -30,6 +30,19 @@ import com.niranjan.helm.core.ScrollBatcher
 import com.niranjan.helm.core.Vk
 import com.niranjan.helm.core.WindowEntry
 import com.niranjan.helm.core.DisplayBrightness
+import com.niranjan.helm.core.CustomIcon
+import com.niranjan.helm.core.DeckLayout
+import com.niranjan.helm.core.DeckPage
+import com.niranjan.helm.core.DeckPages
+import com.niranjan.helm.core.DockFolders
+import com.niranjan.helm.core.SmartOrder
+import com.niranjan.helm.core.appUsage
+import com.niranjan.helm.core.deck2
+import com.niranjan.helm.core.dock2
+import com.niranjan.helm.core.profiles
+import com.niranjan.helm.core.putIcon
+import com.niranjan.helm.core.setDeck2
+import com.niranjan.helm.core.supportsG5
 import com.niranjan.helm.device.SharedItem
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -88,7 +101,17 @@ data class RemoteUi(
     val deckOn: Map<String, Boolean> = emptyMap(),
     /** `deck.widget{id,text}` per button. */
     val deckText: Map<String, String> = emptyMap(),
-)
+    /** G5 (dock-deck-2.md): agent has dock folders, deck pages, usage and custom icons. */
+    val g5: Boolean = false,
+    /** G5 deck pages (always at least one); [deck] holds every button. */
+    val deckPages: List<DeckPage> = listOf(DeckPage(DeckPages.DEFAULT_ID, "Main", emptyList())),
+    /** G5 usage scores by lowercase app id (smart order). */
+    val usage: Map<String, Double> = emptyMap(),
+    /** Deck page the active profile asks for; DeckScreen switches to it once. */
+    val deckPageWanted: String? = null,
+) {
+    val deckLayout: DeckLayout get() = DeckLayout(deck, deckPages)
+}
 
 /** Supplies app icons to composables. */
 class IconLoader(val peek: (String) -> Bitmap?, val load: suspend (String) -> Bitmap?)
@@ -118,6 +141,13 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         peek = { appId -> controller.icons.peek(hostId, appId) },
         load = { appId -> api?.let { controller.icons.get(it, hostId, appId) } },
     )
+
+    /** G5 uploaded icons, keyed by `c:<hash>`. */
+    val customIcons = IconLoader(
+        peek = { icon -> controller.icons.peekCustom(hostId, icon) },
+        load = { icon -> api?.takeIf { it.conn.supportsG5 }?.let { controller.icons.getCustom(it, hostId, icon) } },
+    )
+    private var usageJob: Job? = null
 
     private val motion = MotionBatcher()
     private val scroll = ScrollBatcher()
@@ -190,7 +220,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun onReady(c: HelmConnection) = coroutineScope {
         val p1 = c.supportsPhase1
-        _ui.update { it.copy(phase1 = p1, phase3 = c.supportsPhase3, phase4 = c.supportsPhase4, phase5 = c.supportsPhase5) }
+        _ui.update { it.copy(phase1 = p1, phase3 = c.supportsPhase3, phase4 = c.supportsPhase4, phase5 = c.supportsPhase5, g5 = c.supportsG5) }
         launch { c.events.collect { handleEvent(it) } }
         if (!p1) return@coroutineScope
         launch { refreshDock() }
@@ -200,6 +230,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         launch { refreshDisplays() }
         launch { quiet { it.powerStatus() }.let { p -> _ui.update { it.copy(power = p) } } }
         launch { refreshDeck() }
+        if (c.supportsG5) launch { refreshUsage() }
         launch { quiet { it.monitors() }?.let { m -> _ui.update { it.copy(monitors = m) } } }
     }
 
@@ -233,6 +264,10 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                 val text = ev.data["text"].strOrNull() ?: ""
                 _ui.update { it.copy(deckText = it.deckText + (id to text)) }
             }
+            "profile.active" -> {
+                val id = ev.data["id"].strOrNull()
+                if (id != null && _ui.value.phase3) viewModelScope.launch { followProfile(id) }
+            }
             "power.scheduled" -> _ui.update { it.copy(power = PowerSchedule.fromHolder(ev.data)) }
             "clipboard.changed" -> if (_ui.value.clipboardWatch) {
                 val text = (ev.data["text"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
@@ -251,7 +286,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     // ---- Dock ---------------------------------------------------------------------------
 
     suspend fun refreshDock() {
-        quiet { it.dock() }?.let { d -> _ui.update { it.copy(dock = d) } }
+        quiet { it.dock2() }?.let { d -> _ui.update { it.copy(dock = d) } }
     }
 
     private fun saveDock(pages: List<List<DockTile>>) {
@@ -263,7 +298,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addAppToDock(app: AppEntry) {
-        if (_ui.value.dock.flatten().any { it.kind == DockTile.KIND_APP && it.appId == app.appId }) {
+        if (DockFolders.leaves(_ui.value.dock).any { it.kind == DockTile.KIND_APP && it.appId == app.appId }) {
             message("${app.name} is already in the dock.")
             return
         }
@@ -277,15 +312,59 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         saveDock(DockCodec.append(_ui.value.dock, tile, settings.value.dockPageSize))
     }
 
-    fun removeTile(id: String) = saveDock(DockCodec.remove(_ui.value.dock, id))
+    fun removeTile(id: String) = saveDock(DockFolders.remove(_ui.value.dock, id))
 
     fun moveTile(id: String, delta: Int) = saveDock(DockCodec.move(_ui.value.dock, id, delta))
 
     fun moveTileToPage(id: String, page: Int) = saveDock(DockCodec.moveToPage(_ui.value.dock, id, page))
 
     fun renameTile(id: String, label: String) = saveDock(
-        _ui.value.dock.map { p -> p.map { if (it.id == id) it.copy(label = label.ifBlank { null }) else it } },
+        DockFolders.update(_ui.value.dock, id) { it.copy(label = label.ifBlank { null }) },
     )
+
+    /** G5: icon reference for a tile (null = automatic). */
+    fun setTileIcon(id: String, icon: String?) = saveDock(DockFolders.update(_ui.value.dock, id) { it.copy(icon = icon) })
+
+    /** G5: drag [srcId] onto [dstId] to make (or add to) a folder. */
+    fun dropTile(srcId: String, dstId: String) {
+        if (!_ui.value.g5) {
+            message("Folders need a newer Helm agent on the PC.")
+            return
+        }
+        val after = DockFolders.drop(_ui.value.dock, srcId, dstId, newId())
+        if (after != _ui.value.dock) saveDock(after)
+    }
+
+    /** G5: take a tile out of its folder (it goes right after the folder). */
+    fun takeOutOfFolder(childId: String) = saveDock(DockFolders.takeOut(_ui.value.dock, childId))
+
+    fun ungroupFolder(folderId: String) = saveDock(DockFolders.ungroup(_ui.value.dock, folderId))
+
+    // ---- Usage (G5 smart order) ---------------------------------------------------------
+
+    suspend fun refreshUsage() {
+        if (!_ui.value.g5) return
+        quiet { it.appUsage() }?.let { u -> _ui.update { it.copy(usage = SmartOrder.scores(u)) } }
+    }
+
+    /** Re-read usage a moment after a launch (the PC counts it). */
+    private fun usageSoon() {
+        if (!_ui.value.g5) return
+        usageJob?.cancel()
+        usageJob = viewModelScope.launch {
+            delay(1500)
+            refreshUsage()
+        }
+    }
+
+    /** `profile.active`: show the profile's deck page (its `deck_id` names a page). */
+    private suspend fun followProfile(profileId: String) {
+        val p = quiet { it.profiles() }?.firstOrNull { it.id == profileId } ?: return
+        val page = DeckPages.forProfile(_ui.value.deckPages, p.deckId) ?: return
+        _ui.update { it.copy(deckPageWanted = page.id) }
+    }
+
+    fun deckPageShown() = _ui.update { it.copy(deckPageWanted = null) }
 
     /** Tap: focus the app's window if it is running, otherwise launch it (or open the target). */
     fun tapTile(tile: DockTile) {
@@ -295,6 +374,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                     val appId = tile.appId ?: return@launch
                     val win = runningWindow(appId)
                     if (win != null) act("Focus") { it.focus(win.hwnd) } else act("Launch") { it.launch(appId) }
+                    usageSoon()
                 }
                 DockTile.KIND_OPEN -> tile.target?.let { t -> act("Open") { it.open(t) } }
                 else -> message("Unknown tile type ${tile.kind}.")
@@ -324,6 +404,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val win = runningWindow(app.appId)
             if (win != null) act("Focus") { it.focus(win.hwnd) } else act("Launch") { it.launch(app.appId) }
+            usageSoon()
         }
     }
 
@@ -471,35 +552,73 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     // ---- Deck ---------------------------------------------------------------------------
 
     suspend fun refreshDeck() {
-        quiet { it.deck() }?.let { d -> _ui.update { it.copy(deck = d) } }
+        quiet { it.deck2() }?.let { l -> _ui.update { it.copy(deck = l.buttons, deckPages = l.pages) } }
     }
 
-    private fun saveDeck(buttons: List<DeckButton>) {
-        val before = _ui.value.deck
-        _ui.update { it.copy(deck = buttons) }
+    private fun saveDeck(layout: DeckLayout) {
+        val before = _ui.value.deckLayout
+        val pages = DeckPages.normalize(layout.pages, layout.buttons)
+        _ui.update { it.copy(deck = layout.buttons, deckPages = pages) }
         viewModelScope.launch {
-            if (act("Saving deck") { it.setDeck(buttons) } == null) _ui.update { it.copy(deck = before) }
+            if (act("Saving deck") { it.setDeck2(DeckLayout(layout.buttons, pages)) } == null) {
+                _ui.update { it.copy(deck = before.buttons, deckPages = before.pages) }
+            }
         }
     }
 
-    fun saveDeckButton(b: DeckButton) {
-        val list = _ui.value.deck
-        saveDeck(if (list.any { it.id == b.id }) list.map { if (it.id == b.id) b else it } else list + b)
+    /** Adds or updates a button; a new one goes to [pageId] (default: the first page). */
+    fun saveDeckButton(b: DeckButton, pageId: String? = null) =
+        saveDeck(DeckPages.upsert(_ui.value.deckLayout, b, pageId ?: _ui.value.deckPages.first().id))
+
+    fun deleteDeckButton(id: String) = saveDeck(DeckPages.delete(_ui.value.deckLayout, id))
+
+    fun moveDeckButton(id: String, delta: Int) = saveDeck(DeckPages.shift(_ui.value.deckLayout, id, delta))
+
+    fun moveDeckButtonToPage(id: String, pageId: String) = saveDeck(DeckPages.moveTo(_ui.value.deckLayout, id, pageId))
+
+    fun addDeckPage(name: String): String? {
+        if (!_ui.value.g5) {
+            message("Deck pages need a newer Helm agent on the PC.")
+            return null
+        }
+        val id = newId()
+        saveDeck(DeckPages.addPage(_ui.value.deckLayout, id, name.trim().ifEmpty { "Page ${_ui.value.deckPages.size + 1}" }))
+        return id
     }
 
-    fun deleteDeckButton(id: String) = saveDeck(_ui.value.deck.filterNot { it.id == id })
+    fun renameDeckPage(id: String, name: String) = saveDeck(DeckPages.renamePage(_ui.value.deckLayout, id, name.trim()))
 
-    fun moveDeckButton(id: String, delta: Int) {
-        val list = _ui.value.deck.toMutableList()
-        val i = list.indexOfFirst { it.id == id }
-        val j = i + delta
-        if (i < 0 || j !in list.indices) return
-        list.add(j, list.removeAt(i))
-        saveDeck(list)
-    }
+    fun deleteDeckPage(id: String) = saveDeck(DeckPages.deletePage(_ui.value.deckLayout, id))
 
     fun runDeck(b: DeckButton) {
-        viewModelScope.launch { act(b.label.ifBlank { "Button" }) { it.runDeck(b.id) } }
+        viewModelScope.launch {
+            act(b.label.ifBlank { "Button" }) { it.runDeck(b.id) }
+            if (b.action is com.niranjan.helm.core.DeckAction.Launch) usageSoon()
+        }
+    }
+
+    /**
+     * G5: uploads a picture from the phone as a custom icon (center-cropped to
+     * [CustomIcon.SIDE_PX] px, PNG). Returns the icon reference, or null on failure.
+     */
+    suspend fun uploadIcon(uri: Uri): String? {
+        val ctx = getApplication<Application>()
+        val png = withContext(Dispatchers.Default) {
+            runCatching {
+                val src = ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } ?: return@runCatching null
+                val side = minOf(src.width, src.height)
+                val square = Bitmap.createBitmap(src, (src.width - side) / 2, (src.height - side) / 2, side, side)
+                val scaled = Bitmap.createScaledBitmap(square, CustomIcon.SIDE_PX, CustomIcon.SIDE_PX, true)
+                java.io.ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+            }.getOrNull()
+        }
+        if (png == null || png.size > CustomIcon.MAX_BYTES) {
+            message("Could not read that picture.")
+            return null
+        }
+        val icon = act("Uploading icon") { it.putIcon(png) } ?: return null
+        controller.icons.putCustom(hostId, icon, png)
+        return icon
     }
 
     fun newId(): String = UUID.randomUUID().toString().take(8)

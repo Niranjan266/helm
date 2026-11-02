@@ -23,6 +23,11 @@ G3 (`g3`, [`Docs/protocol/streaming-2.md`](../Docs/protocol/streaming-2.md)): wi
 with thumbnails, gaming presets (720p/1080p at 60/120 fps, sound on), Drag mode (long-press-then-
 drag holds the left button, two-finger tap = right click), Second screen (mirror one monitor,
 view only, rotation lock), input over the `/stream` socket (`core/StreamG3.kt`, `G3Test`).
+
+G5 (`g5`, [Docs/protocol/dock-deck-2.md](../Docs/protocol/dock-deck-2.md)): dock folders (hold and
+drag a tile onto another; tap a folder for a sheet), Smart order (Settings), deck pages (swipe,
+per-profile page via the profile's deck id) with 1×1/2×1/2×2 buttons, and icons (real app icon
+automatically, built-in stroke icons, or a picture uploaded to the PC).
 Every p3/p4/p5 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 

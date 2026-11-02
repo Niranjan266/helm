@@ -29,6 +29,8 @@ pub mod everyday;
 pub mod g3;
 // G2: presentation mode
 pub mod present;
+// G5: dock folders, smart order, deck pages, icons
+pub mod g5;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -52,6 +54,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(everyday::EverydayModule),
         Arc::new(g3::G3Module),
         Arc::new(present::PresentModule),
+        Arc::new(g5::G5Module),
     ]
 }
 

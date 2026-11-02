@@ -40,6 +40,7 @@ fun SettingsScreen(
                     BpFilterChip(selected = settings.dockPageSize == n, onClick = { onSettings { it.copy(dockPageSize = n) } }, label = { Text("$n") })
                 }
             }
+            ToggleRow("Smart order: most used apps first (dock and app list)", settings.smartOrder) { v -> onSettings { it.copy(smartOrder = v) } }
         }
         SectionCard("App lock") {
             Text("Lock Helm after it is in the background for")

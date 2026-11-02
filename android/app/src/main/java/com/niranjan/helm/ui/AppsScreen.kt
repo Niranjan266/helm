@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun AppsScreen(remote: RemoteViewModel) {
     val ui by remote.ui.collectAsStateWithLifecycle()
+    val appSettings by remote.settings.collectAsStateWithLifecycle()
     var windowsTab by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -66,7 +67,8 @@ fun AppsScreen(remote: RemoteViewModel) {
                 apps == null -> HintText("Could not load the app list.", Modifier.padding(16.dp))
                 else -> {
                     val q = query.trim().lowercase()
-                    val shown = if (q.isEmpty()) apps else apps.filter { q in it.name.lowercase() }
+                    val ordered = if (appSettings.smartOrder) com.niranjan.helm.core.SmartOrder.sortApps(apps, ui.usage) else apps
+                    val shown = if (q.isEmpty()) ordered else ordered.filter { q in it.name.lowercase() }
                     LazyColumn(Modifier.fillMaxSize()) {
                         items(shown, key = { it.appId }) { app ->
                             Row(
