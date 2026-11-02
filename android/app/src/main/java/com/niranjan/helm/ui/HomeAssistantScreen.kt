@@ -115,7 +115,7 @@ internal fun HaActionEditor(value: String, onValue: (String) -> Unit) {
     ui.haStates?.takeIf { it.isNotEmpty() }?.let { states ->
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             states.take(40).forEach { s ->
-                AssistChip(onClick = { onValue("${s.toggleService} ${s.entityId}") }, label = { Text(s.label) })
+                BpFilterChip(selected = false, onClick = { onValue("${s.toggleService} ${s.entityId}") }, label = { Text(s.label) })
             }
         }
     }

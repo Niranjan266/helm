@@ -97,6 +97,6 @@ fun LockScreen(onUnlock: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         Text("Unlock with your fingerprint, face or screen lock.", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
-        Button(onClick = onUnlock) { Text("Unlock") }
+        PencilButton(onClick = onUnlock) { Text("Unlock") }
     }
 }

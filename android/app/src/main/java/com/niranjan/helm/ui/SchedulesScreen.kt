@@ -78,7 +78,7 @@ fun SchedulesScreen(vm: EverydayViewModel = viewModel()) {
             return@Column
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = list != null && list.size < Schedule.MAX, onClick = {
+            PencilButton(enabled = list != null && list.size < Schedule.MAX, onClick = {
                 editing = Schedule(
                     id = Schedule.newId(list.orEmpty().map { it.id }),
                     time = "08:00",
@@ -93,7 +93,7 @@ fun SchedulesScreen(vm: EverydayViewModel = viewModel()) {
             list.isEmpty() -> HintText("No schedules. Add one to lock, sleep or shut down the PC, or run any deck action, at a set time.")
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                 items(list, key = { it.id }) { s ->
-                    Card(Modifier.fillMaxWidth().clickable { editing = s }) {
+                    BpCard(Modifier.fillMaxWidth().clickable { editing = s }) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -165,7 +165,7 @@ private fun ScheduleEditor(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it.take(Schedule.MAX_NAME) }, label = { Text("Name (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Text("Time (PC's clock)", style = MaterialTheme.typography.labelLarge)
-                OutlinedButton(onClick = {
+                OutlineButton(onClick = {
                     val h = time.substringBefore(':').toIntOrNull() ?: 8
                     val m = time.substringAfter(':').toIntOrNull() ?: 0
                     TimePickerDialog(context, { _, hh, mm -> time = Schedule.time(hh, mm) }, h, m, AndroidDateFormat.is24HourFormat(context)).show()
@@ -174,13 +174,13 @@ private fun ScheduleEditor(
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Schedule.DAY_LABELS.forEachIndexed { i, l ->
                         val d = i + 1
-                        FilterChip(selected = d in days, onClick = { days = if (d in days) days - d else days + d }, label = { Text(l) })
+                        BpFilterChip(selected = d in days, onClick = { days = if (d in days) days - d else days + d }, label = { Text(l) })
                     }
                 }
                 if (days.isEmpty()) {
                     HintText("No days: runs once" + (date?.let { " on $it" } ?: " the next time it is $time") + ".")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
+                        OutlineButton(onClick = {
                             val c = Calendar.getInstance()
                             date?.split('-')?.mapNotNull { it.toIntOrNull() }?.takeIf { it.size == 3 }?.let { c.set(it[0], it[1] - 1, it[2]) }
                             DatePickerDialog(context, { _, y, mo, d -> date = "%04d-%02d-%02d".format(y, mo + 1, d) },
@@ -192,7 +192,7 @@ private fun ScheduleEditor(
                 Text("Do", style = MaterialTheme.typography.labelLarge)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     kinds.forEach { k ->
-                        FilterChip(
+                        BpFilterChip(
                             selected = kind == k,
                             onClick = { if (kind != k) { kind = k; value = defaultValue(k) } },
                             label = { Text(if (k == K_POWER) "Power" else kindLabel(k)) },
@@ -203,7 +203,7 @@ private fun ScheduleEditor(
                     kind == K_POWER -> {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             ScheduleAction.POWER_KINDS.forEach { p ->
-                                FilterChip(selected = power == p, onClick = { power = p }, label = { Text(ScheduleAction.powerLabel(p)) })
+                                BpFilterChip(selected = power == p, onClick = { power = p }, label = { Text(ScheduleAction.powerLabel(p)) })
                             }
                         }
                         HintText("Power actions need the admin access level on the PC.")

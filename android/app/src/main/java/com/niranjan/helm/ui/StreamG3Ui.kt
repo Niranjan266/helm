@@ -82,11 +82,11 @@ fun G3Controls(vm: StreamViewModel, g3: G3Ui, windows: List<WindowEntry>, monito
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        OutlinedButton(onClick = { pickWindow = true }) {
+        OutlineButton(onClick = { pickWindow = true }) {
             Text(g3.window?.let { "Window: ${it.title.take(18)}" } ?: "Window…", maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Box {
-            OutlinedButton(onClick = { gamingOpen = true }) { Text(g3.gaming?.label ?: "Gaming off") }
+            OutlineButton(onClick = { gamingOpen = true }) { Text(g3.gaming?.label ?: "Gaming off") }
             DropdownMenu(expanded = gamingOpen, onDismissRequest = { gamingOpen = false }) {
                 DropdownMenuItem(text = { Text("Gaming off") }, onClick = { gamingOpen = false; vm.setGaming(null) })
                 GamingPreset.entries.forEach { p ->
@@ -97,8 +97,8 @@ fun G3Controls(vm: StreamViewModel, g3: G3Ui, windows: List<WindowEntry>, monito
                 }
             }
         }
-        FilterChip(selected = g3.dragMode, onClick = { vm.setDragMode(!g3.dragMode) }, label = { Text("Drag mode") })
-        OutlinedButton(onClick = { pickScreen = true }) { Text(if (g3.secondScreen) "Second screen: on" else "Second screen…") }
+        BpFilterChip(selected = g3.dragMode, onClick = { vm.setDragMode(!g3.dragMode) }, label = { Text("Drag mode") })
+        OutlineButton(onClick = { pickScreen = true }) { Text(if (g3.secondScreen) "Second screen: on" else "Second screen…") }
         Text(
             if (g3.inputOnStream) "input: stream" else "input: control",
             style = MaterialTheme.typography.labelSmall,

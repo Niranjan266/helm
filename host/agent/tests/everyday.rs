@@ -411,7 +411,7 @@ async fn schedules_run_deck_and_power_actions_and_one_offs_disable() {
     assert!(dir.path().join("schedules.json").exists());
 
     helm_agent::g6::schedule_tick_at(server.state(), next + 1_000);
-    let mut ran = vec![
+    let mut ran = [
         c.event("schedule.ran").await,
         c.event("schedule.ran").await,
     ];

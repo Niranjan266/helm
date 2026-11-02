@@ -41,7 +41,7 @@ fun FindPhoneScreen(vm: EverydayViewModel = viewModel()) {
         }
         if (ringing != null) {
             SectionCard("This phone is ringing") {
-                Button(onClick = { PhoneRinger.stop(context) }) { Text("Found it") }
+                PencilButton(onClick = { PhoneRinger.stop(context) }) { Text("Found it") }
             }
         }
         SectionCard("Ring another phone") {
@@ -54,15 +54,15 @@ fun FindPhoneScreen(vm: EverydayViewModel = viewModel()) {
                     Column(Modifier.padding(vertical = 4.dp)) {
                         Text(p.name, style = MaterialTheme.typography.titleSmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Button(onClick = { vm.ring(p, stop = false) }) { Text("Ring") }
-                            OutlinedButton(onClick = { vm.ring(p, stop = true) }) { Text("Stop") }
+                            PencilButton(onClick = { vm.ring(p, stop = false) }) { Text("Ring") }
+                            OutlineButton(onClick = { vm.ring(p, stop = true) }) { Text("Stop") }
                         }
                     }
                 }
             }
             val offline = list.orEmpty().filter { !it.online && !it.isThis }
             if (offline.isNotEmpty()) HintText("Not connected: " + offline.joinToString { it.name })
-            OutlinedButton(onClick = vm::loadPhones) { Text("Refresh") }
+            OutlineButton(onClick = vm::loadPhones) { Text("Refresh") }
         }
         SectionCard("When this phone is rung") {
             HintText(
@@ -71,7 +71,7 @@ fun FindPhoneScreen(vm: EverydayViewModel = viewModel()) {
             )
             if (!PhoneRinger.canUseFullScreen(context) && Build.VERSION.SDK_INT >= 34) {
                 Text("Allow full-screen alarms so the ringing screen can open over the lock screen.", color = MaterialTheme.colorScheme.error)
-                OutlinedButton(onClick = {
+                OutlineButton(onClick = {
                     runCatching {
                         context.startActivity(
                             Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:" + context.packageName))

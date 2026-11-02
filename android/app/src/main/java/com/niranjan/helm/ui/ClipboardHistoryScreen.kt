@@ -63,8 +63,8 @@ fun ClipboardHistoryScreen(vm: EverydayViewModel = viewModel()) {
             }
             HintText("Items copied from password managers are never recorded.")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = vm::loadClips) { Text("Refresh") }
-                OutlinedButton(enabled = !h?.items.isNullOrEmpty(), onClick = { confirmClear = true }) { Text("Clear") }
+                OutlineButton(onClick = vm::loadClips) { Text("Refresh") }
+                OutlineButton(enabled = !h?.items.isNullOrEmpty(), onClick = { confirmClear = true }) { Text("Clear") }
             }
         }
         when {
@@ -106,7 +106,7 @@ private fun ClipCard(
     onToPc: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth()) {
+    BpCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (item.isImage) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

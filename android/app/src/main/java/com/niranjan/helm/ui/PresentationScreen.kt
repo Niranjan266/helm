@@ -122,8 +122,8 @@ fun PresentationScreen(snackbar: androidx.compose.material3.SnackbarHostState) {
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                FilledTonalButton(onClick = vm::timerToggle) { Text(if (ui.timerRunning) "Pause" else "Start timer") }
-                OutlinedButton(onClick = vm::timerReset) { Text("Reset") }
+                OutlineButton(onClick = vm::timerToggle) { Text(if (ui.timerRunning) "Pause" else "Start timer") }
+                OutlineButton(onClick = vm::timerReset) { Text("Reset") }
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -132,7 +132,7 @@ fun PresentationScreen(snackbar: androidx.compose.material3.SnackbarHostState) {
             ) {
                 Text("Countdown", style = MaterialTheme.typography.labelLarge)
                 listOf(null, 5, 10, 15, 20, 30, 45).forEach { m ->
-                    FilterChip(
+                    BpFilterChip(
                         selected = ui.countdownMin == m,
                         onClick = { vm.setCountdown(m) },
                         label = { Text(m?.toString() ?: "Off") },
@@ -142,14 +142,12 @@ fun PresentationScreen(snackbar: androidx.compose.material3.SnackbarHostState) {
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
+            OutlineButton(
                 onClick = { vm.go(PresentAction.PREV) },
-                shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.weight(1f).height(120.dp),
             ) { Text("Prev", fontSize = 26.sp) }
-            Button(
+            PencilButton(
                 onClick = { vm.go(PresentAction.NEXT) },
-                shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.weight(2f).height(120.dp),
             ) { Text("Next", fontSize = 30.sp) }
         }
@@ -188,17 +186,17 @@ private fun LaserCard(vm: PresentationViewModel, ui: PresentUi) {
     SectionCard("Laser pointer") {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (vm.tiltAvailable) {
-                FilterChip(selected = ui.laserMode == LaserMode.TILT, onClick = { vm.setLaserMode(LaserMode.TILT) }, label = { Text("Tilt") })
+                BpFilterChip(selected = ui.laserMode == LaserMode.TILT, onClick = { vm.setLaserMode(LaserMode.TILT) }, label = { Text("Tilt") })
             }
-            FilterChip(selected = ui.laserMode == LaserMode.TOUCH, onClick = { vm.setLaserMode(LaserMode.TOUCH) }, label = { Text("Touch") })
+            BpFilterChip(selected = ui.laserMode == LaserMode.TOUCH, onClick = { vm.setLaserMode(LaserMode.TOUCH) }, label = { Text("Touch") })
             Text("Trail", modifier = Modifier.padding(start = 8.dp))
             Switch(checked = ui.trail, onCheckedChange = vm::setTrail)
         }
         if (ui.monitors.size > 1) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                FilterChip(selected = ui.laserMonitor < 0, onClick = { vm.setLaserMonitor(-1) }, label = { Text("Main") })
+                BpFilterChip(selected = ui.laserMonitor < 0, onClick = { vm.setLaserMonitor(-1) }, label = { Text("Main") })
                 ui.monitors.forEachIndexed { i, m ->
-                    FilterChip(
+                    BpFilterChip(
                         selected = ui.laserMonitor == i,
                         onClick = { vm.setLaserMonitor(i) },
                         label = { Text(m.name.ifBlank { "Monitor ${i + 1}" }) },
