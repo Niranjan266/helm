@@ -27,6 +27,8 @@ data class Settings(
     val mirrorNotifications: Boolean = false,
     /** Package names allowed to mirror; empty = none. */
     val mirrorApps: Set<String> = emptySet(),
+    /** G5: order dock tiles and the app list by how much each app is used on the PC. */
+    val smartOrder: Boolean = false,
 )
 
 /** Phone-local preferences (not synced to the PC). */
@@ -48,6 +50,7 @@ class AppSettings(context: Context) {
         streamShowStats = prefs.getBoolean("st_stats", false),
         mirrorNotifications = prefs.getBoolean("nm_on", false),
         mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
+        smartOrder = prefs.getBoolean("smart_order", false),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -65,6 +68,7 @@ class AppSettings(context: Context) {
             .putBoolean("st_stats", s.streamShowStats)
             .putBoolean("nm_on", s.mirrorNotifications)
             .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))
+            .putBoolean("smart_order", s.smartOrder)
             .apply()
         _settings.value = s
     }

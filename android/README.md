@@ -19,6 +19,10 @@ colours, input line + special keys, resize on layout change; admin + biometric c
 notification mirroring (NotificationListenerService, per-app allow-list in Settings, off by
 default; toast actions and RemoteInput replies come back via `notify.action`), Plugins (enable,
 grant capabilities), Triggers editor, and Home Assistant (connection, states, `ha` deck action).
+G5 (`g5`, [Docs/protocol/dock-deck-2.md](../Docs/protocol/dock-deck-2.md)): dock folders (hold and
+drag a tile onto another; tap a folder for a sheet), Smart order (Settings), deck pages (swipe,
+per-profile page via the profile's deck id) with 1×1/2×1/2×2 buttons, and icons (real app icon
+automatically, built-in stroke icons, or a picture uploaded to the PC).
 Every p3/p4/p5 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 

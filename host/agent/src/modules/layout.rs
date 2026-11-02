@@ -10,7 +10,7 @@ use crate::platform::{InputEvent, blocking};
 use crate::router::{MethodSpec, Module, RequestContext, RpcError, Tier};
 use crate::server::AppState;
 use std::sync::Arc;
-use crate::store::{self, DeckAction, DeckButton, Tile};
+use crate::store::{self, DeckAction, DeckButton, DeckPage, Tile};
 
 pub struct LayoutModule;
 
@@ -42,7 +42,12 @@ impl Module for LayoutModule {
         match method {
             "dock.get" => {
                 let pages = blocking(move || state.layouts.dock().map_err(internal)).await?;
-                Ok(json!({"pages": pages}))
+                // G5 phones ask for `v:2` (folders); older ones get folders flattened.
+                if is_v2(&params) {
+                    Ok(json!({"pages": pages, "v": 2}))
+                } else {
+                    Ok(json!({"pages": store::flatten_pages(&pages)}))
+                }
             }
             "dock.set" => {
                 let pages: Vec<Vec<Tile>> = typed_param(&params, "pages")?;
@@ -50,19 +55,41 @@ impl Module for LayoutModule {
                 let saved = pages.clone();
                 let st = state.clone();
                 blocking(move || st.layouts.set_dock(saved).map_err(internal)).await?;
-                state.broadcast("dock.changed", json!({"pages": pages}));
+                state.broadcast(
+                    "dock.changed",
+                    json!({"pages": store::flatten_pages(&pages)}),
+                );
                 Ok(json!({}))
             }
             "deck.get" => {
+                if is_v2(&params) {
+                    let (buttons, pages) =
+                        blocking(move || state.layouts.deck_pages().map_err(internal)).await?;
+                    return Ok(json!({"buttons": buttons, "pages": pages, "v": 2}));
+                }
                 let buttons = blocking(move || state.layouts.deck().map_err(internal)).await?;
                 Ok(json!({"buttons": buttons}))
             }
             "deck.set" => {
                 let buttons: Vec<DeckButton> = typed_param(&params, "buttons")?;
                 store::validate_buttons(&buttons).map_err(RpcError::bad_params)?;
+                let pages: Option<Vec<DeckPage>> = match params.get("pages") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(typed_param(&params, "pages")?),
+                };
+                if let Some(p) = &pages {
+                    store::validate_deck_pages(p).map_err(RpcError::bad_params)?;
+                }
                 let saved = buttons.clone();
                 let st = state.clone();
-                blocking(move || st.layouts.set_deck(saved).map_err(internal)).await?;
+                blocking(move || {
+                    match pages {
+                        Some(p) => st.layouts.set_deck2(saved, p),
+                        None => st.layouts.set_deck(saved),
+                    }
+                    .map_err(internal)
+                })
+                .await?;
                 state.broadcast("deck.changed", json!({"buttons": buttons}));
                 Ok(json!({}))
             }
@@ -80,6 +107,11 @@ impl Module for LayoutModule {
             _ => Err(RpcError::unknown_method(method)),
         }
     }
+}
+
+/// G5 request shape (`{"v":2}`): folders in `dock.get`, pages in `deck.get`.
+fn is_v2(params: &Value) -> bool {
+    params.get("v").and_then(Value::as_u64).is_some_and(|v| v >= 2)
 }
 
 /// Inject a short sequence with a fresh injector (released when done).
@@ -135,7 +167,12 @@ async fn run_action_inner(state: &Arc<AppState>, action: DeckAction) -> Result<(
             inject(state, InputEvent::Shortcut { keys }).await
         }
         DeckAction::Text(text) => inject(state, InputEvent::Text { text }).await,
-        DeckAction::Launch(app_id) => blocking(move || p.launch_app(&app_id)).await,
+        DeckAction::Launch(app_id) => {
+            let id = app_id.clone();
+            blocking(move || p.launch_app(&id)).await?;
+            crate::g5::record_launch(state, &app_id).await;
+            Ok(())
+        }
         DeckAction::Open(target) => {
             let target = check_open_target(&target)?;
             blocking(move || p.open_target(&target)).await

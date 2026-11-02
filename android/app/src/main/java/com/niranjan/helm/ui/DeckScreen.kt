@@ -8,17 +8,18 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +34,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -50,10 +53,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niranjan.helm.core.DeckAction
+import com.niranjan.helm.core.ButtonSize
 import com.niranjan.helm.core.DeckButton
+import com.niranjan.helm.core.DeckGrid
+import com.niranjan.helm.core.DeckLayout
+import com.niranjan.helm.core.DeckPage
+import com.niranjan.helm.core.DeckPages
+import com.niranjan.helm.core.IconRef
 import com.niranjan.helm.core.DeckCodec
 import com.niranjan.helm.core.HaState
 import com.niranjan.helm.device.Settings
+import kotlinx.coroutines.launch
 
 val DeckColors = listOf("#3B82F6", "#22C55E", "#EF4444", "#F59E0B", "#A855F7", "#EC4899", "#14B8A6", "#64748B")
 
@@ -170,6 +180,19 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
     val haptic = LocalHapticFeedback.current
     var editMode by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<DeckButton?>(null) }
+    var renamingPage by remember { mutableStateOf<DeckPage?>(null) }
+    val pages = ui.deckPages
+    val pager = rememberPagerState { pages.size }
+    val scope = rememberCoroutineScope()
+    val currentPage = pages.getOrElse(pager.currentPage.coerceAtMost(pages.lastIndex)) { pages.first() }
+
+    // A profile became active and names a deck page: show it.
+    LaunchedEffect(ui.deckPageWanted, pages) {
+        val want = ui.deckPageWanted ?: return@LaunchedEffect
+        val i = pages.indexOfFirst { it.id == want }
+        if (i >= 0) pager.animateScrollToPage(i)
+        remote.deckPageShown()
+    }
 
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -182,45 +205,48 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
             Spacer(Modifier.weight(1f))
             if (editMode) HintText("Tap a button to edit it")
         }
+        if (pages.size > 1 || (editMode && ui.g5)) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                pages.forEachIndexed { i, p ->
+                    FilterChip(
+                        selected = i == pager.currentPage,
+                        onClick = { if (editMode && i == pager.currentPage) renamingPage = p else scope.launch { pager.animateScrollToPage(i) } },
+                        label = { Text(p.name.ifBlank { "Page ${i + 1}" }) },
+                    )
+                }
+                if (editMode && ui.g5 && pages.size < DeckPages.MAX_PAGES) {
+                    TextButton(onClick = {
+                        val id = remote.addDeckPage("Page ${pages.size + 1}")
+                        if (id != null) scope.launch { pager.animateScrollToPage(pages.size) }
+                    }) { Text("+ Page") }
+                }
+            }
+            if (editMode && ui.g5) HintText("Tap the selected page again to rename or delete it. Profiles can pick a page by its name.")
+        }
         Spacer(Modifier.size(8.dp))
         if (ui.deck.isEmpty()) {
             HintText("No deck buttons yet. Turn on Edit and add hotkeys, text snippets, apps, links, media keys" + if (ui.phase3) ", macros or app remotes." else ".")
         }
-        LazyVerticalGrid(columns = GridCells.Adaptive(110.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(ui.deck, key = { it.id }) { b ->
-                val on = ui.deckOn[b.id]
-                val widgetText = ui.deckText[b.id]
-                Box(
-                    Modifier
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(parseColor(b.color).copy(alpha = if (on == false) 0.45f else 1f))
-                        .border(if (on == true) 3.dp else 0.dp, Color.White, RoundedCornerShape(16.dp))
-                        .combinedClickable(
-                            onClick = {
-                                if (editMode) {
-                                    editing = b
-                                } else {
-                                    if (settings.haptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    remote.runDeck(b)
-                                }
-                            },
-                            onLongClick = { editing = b },
-                        )
-                        .padding(8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(b.label.ifBlank { kindLabel(kindOf(b.action)) }, color = Color.White, textAlign = TextAlign.Center, style = MaterialTheme.typography.titleSmall)
-                        if (widgetText != null) {
-                            Text(widgetText, color = Color.White, textAlign = TextAlign.Center, style = MaterialTheme.typography.headlineSmall, maxLines = 2)
-                        }
-                        if (on != null) {
-                            Text(if (on) "ON" else "OFF", color = Color.White, style = MaterialTheme.typography.labelSmall)
-                        }
+        HorizontalPager(state = pager, modifier = Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.Top) { index ->
+            val page = pages.getOrNull(index) ?: return@HorizontalPager
+            DeckGridPage(
+                buttons = DeckLayout(ui.deck, pages).buttonsOn(page.id),
+                ui = ui,
+                remote = remote,
+                onTap = { b ->
+                    if (editMode) {
+                        editing = b
+                    } else {
+                        if (settings.haptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        remote.runDeck(b)
                     }
-                }
-            }
+                },
+                onLongPress = { editing = it },
+            )
         }
     }
 
@@ -228,15 +254,108 @@ fun DeckScreen(remote: RemoteViewModel, settings: Settings) {
         DeckEditor(
             button = b,
             isNew = ui.deck.none { it.id == b.id },
+            pageId = currentPage.id,
             remote = remote,
             onDismiss = { editing = null },
         )
     }
+
+    renamingPage?.let { p ->
+        var name by remember(p.id) { mutableStateOf(p.name) }
+        AlertDialog(
+            onDismissRequest = { renamingPage = null },
+            title = { Text("Deck page") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(name, { name = it.take(64) }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    HintText("Page id for profiles: ${p.id}")
+                    if (pages.size > 1) {
+                        TextButton(onClick = { remote.deleteDeckPage(p.id); renamingPage = null }) {
+                            Text("Delete page (its buttons move to the first page)", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (name.trim() != p.name) remote.renameDeckPage(p.id, name)
+                    renamingPage = null
+                }) { Text("Done") }
+            },
+            dismissButton = { TextButton(onClick = { renamingPage = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** One deck page: buttons packed into a grid; 2×1 / 2×2 buttons span cells. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DeckGridPage(
+    buttons: List<DeckButton>,
+    ui: RemoteUi,
+    remote: RemoteViewModel,
+    onTap: (DeckButton) -> Unit,
+    onLongPress: (DeckButton) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val gap = 10.dp
+        val cols = (maxWidth / 104.dp).toInt().coerceIn(3, 8)
+        val cell = (maxWidth - gap * (cols - 1)) / cols
+        val cells = DeckGrid.pack(buttons.map { ButtonSize.of(it.size) }, cols)
+        val rows = DeckGrid.rowCount(cells)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Box(Modifier.fillMaxWidth().height(if (rows == 0) 0.dp else cell * rows + gap * (rows - 1))) {
+                buttons.forEachIndexed { i, b ->
+                    val c = cells[i]
+                    val on = ui.deckOn[b.id]
+                    val widgetText = ui.deckText[b.id]
+                    val icon = IconRef.forButton(b, ui.apps)
+                    Box(
+                        Modifier
+                            .offset(x = (cell + gap) * c.col, y = (cell + gap) * c.row)
+                            .size(width = cell * c.cols + gap * (c.cols - 1), height = cell * c.rows + gap * (c.rows - 1))
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(parseColor(b.color).copy(alpha = if (on == false) 0.45f else 1f))
+                            .border(if (on == true) 3.dp else 0.dp, Color.White, RoundedCornerShape(16.dp))
+                            .combinedClickable(onClick = { onTap(b) }, onLongClick = { onLongPress(b) })
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val big = c.rows > 1
+                            if (icon != IconRef.None && widgetText == null) {
+                                IconView(icon, b.label, remote.icons, remote.customIcons, if (big) 64.dp else 30.dp, tint = Color.White)
+                                Spacer(Modifier.size(4.dp))
+                            }
+                            val label = b.label.ifBlank { if (icon == IconRef.None) kindLabel(kindOf(b.action)) else "" }
+                            if (label.isNotEmpty()) {
+                                Text(label, color = Color.White, textAlign = TextAlign.Center, style = if (big) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall, maxLines = 2)
+                            }
+                            if (widgetText != null) {
+                                Text(widgetText, color = Color.White, textAlign = TextAlign.Center, style = if (big) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineSmall, maxLines = 2)
+                            }
+                            if (on != null) {
+                                Text(if (on) "ON" else "OFF", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
-private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewModel, onDismiss: () -> Unit) {
+private fun DeckEditor(button: DeckButton, isNew: Boolean, pageId: String, remote: RemoteViewModel, onDismiss: () -> Unit) {
     val ui by remote.ui.collectAsStateWithLifecycle()
+    var size by remember { mutableStateOf(ButtonSize.of(button.size)) }
+    var icon by remember { mutableStateOf(button.icon) }
+    val startPage = if (isNew) pageId else (ui.deckLayout.pageOf(button.id)?.id ?: pageId)
+    var targetPage by remember { mutableStateOf(startPage) }
     var label by remember { mutableStateOf(button.label) }
     var color by remember { mutableStateOf(button.color) }
     var kind by remember { mutableStateOf(kindOf(button.action)) }
@@ -280,6 +399,23 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                                 .border(if (c.equals(color, true)) 3.dp else 0.dp, Color.White, CircleShape)
                                 .clickable { color = c },
                         )
+                    }
+                }
+                if (ui.g5) {
+                    Text("Size", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ButtonSize.entries.forEach { s -> FilterChip(selected = size == s, onClick = { size = s }, label = { Text(s.label) }) }
+                    }
+                    action?.let { a ->
+                        IconChooserRow(icon, IconRef.forButton(button.copy(icon = null, action = a), ui.apps), label, remote) { icon = it }
+                    }
+                    if (ui.deckPages.size > 1) {
+                        Text("Page", style = MaterialTheme.typography.labelLarge)
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ui.deckPages.forEachIndexed { i, pg ->
+                                FilterChip(selected = targetPage == pg.id, onClick = { targetPage = pg.id }, label = { Text(pg.name.ifBlank { "Page ${i + 1}" }) })
+                            }
+                        }
                     }
                 }
                 Text("Action", style = MaterialTheme.typography.labelLarge)
@@ -351,9 +487,11 @@ private fun DeckEditor(button: DeckButton, isNew: Boolean, remote: RemoteViewMod
                 remote.saveDeckButton(
                     button.copy(
                         label = label.trim(), color = color.ifBlank { DeckCodec.DEFAULT_COLOR }, action = action!!,
-                        stateBind = stateBind, widget = widget,
+                        stateBind = stateBind, widget = widget, size = size.wire, icon = icon,
                     ),
+                    targetPage,
                 )
+                if (!isNew && targetPage != startPage) remote.moveDeckButtonToPage(button.id, targetPage)
                 onDismiss()
             }) { Text("Save") }
         },
