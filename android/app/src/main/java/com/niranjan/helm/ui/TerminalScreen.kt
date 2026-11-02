@@ -208,6 +208,6 @@ private fun TermKeyRow(ctrl: Boolean, onCtrl: (Boolean) -> Unit, enabled: Boolea
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         BpFilterChip(selected = ctrl, enabled = enabled, onClick = { onCtrl(!ctrl) }, label = { Text("Ctrl") })
-        keys.forEach { (label, seq) -> AssistChip(enabled = enabled, onClick = { send(seq) }, label = { Text(label) }) }
+        keys.forEach { (label, seq) -> BpFilterChip(selected = false, enabled = enabled, onClick = { send(seq) }, label = { Text(label) }) }
     }
 }

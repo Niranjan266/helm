@@ -32,7 +32,7 @@ fun EverydaySettingsSection() {
     SectionCard("When a file arrives on the PC") {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DropMode.entries.forEach { m ->
-                FilterChip(selected = s.dropMode == m, onClick = { store.update { it.copy(dropMode = m) } }, label = { Text(m.label) })
+                BpFilterChip(selected = s.dropMode == m, onClick = { store.update { it.copy(dropMode = m) } }, label = { Text(m.label) })
             }
         }
         HintText("For files shared to Helm from other apps. Programs and scripts are never opened, only shown in Explorer.")

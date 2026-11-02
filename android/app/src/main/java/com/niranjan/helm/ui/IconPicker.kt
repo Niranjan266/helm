@@ -44,7 +44,7 @@ fun IconChooserRow(icon: String?, auto: IconRef, label: String, remote: RemoteVi
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         val ref = IconRef.parse(icon).takeIf { it != IconRef.None } ?: auto
         IconView(ref, label.ifBlank { "?" }, remote.icons, remote.customIcons, 40.dp)
-        OutlinedButton(onClick = { open = true }) { Text(if (icon == null) "Icon: automatic" else "Change icon") }
+        OutlineButton(onClick = { open = true }) { Text(if (icon == null) "Icon: automatic" else "Change icon") }
     }
     if (open) {
         IconPickerDialog(current = icon, remote = remote, onPick = { onIcon(it); open = false }, onDismiss = { open = false })
@@ -73,8 +73,8 @@ fun IconPickerDialog(current: String?, remote: RemoteViewModel, onPick: (String?
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = { onPick(null) }) { Text("Automatic") }
-                    OutlinedButton(enabled = g5 && !uploading, onClick = { pickImage.launch("image/*") }) { Text("Upload picture") }
+                    OutlineButton(onClick = { onPick(null) }) { Text("Automatic") }
+                    OutlineButton(enabled = g5 && !uploading, onClick = { pickImage.launch("image/*") }) { Text("Upload picture") }
                     if (uploading) CircularProgressIndicator(Modifier.padding(4.dp), strokeWidth = 2.dp)
                 }
                 if (!g5) HintText("Pictures need a newer Helm agent on the PC.")
