@@ -18,6 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayCommand {
     ShowPairing,
+    /// g4: show a 6-digit pairing code (phone camera can't scan).
+    ShowPairingCode,
     PairedDevices,
     ToggleAutostart,
     CheckUpdates,
@@ -74,12 +76,14 @@ fn tray_thread(
     let built = (|| -> anyhow::Result<_> {
         let menu = Menu::new();
         let show = MenuItem::new("Show pairing QR", true, None);
+        let show_code = MenuItem::new("Show pairing code", true, None);
         let devices = MenuItem::new("Paired devices", true, None);
         let autostart = CheckMenuItem::new("Start with Windows", true, autostart_enabled(), None);
         let updates = MenuItem::new("Check for updates", true, None);
         let quit = MenuItem::new("Quit Helm", true, None);
         menu.append_items(&[
             &show,
+            &show_code,
             &devices,
             &PredefinedMenuItem::separator(),
             &autostart,
@@ -89,6 +93,7 @@ fn tray_thread(
         ])?;
         let ids = [
             (show.id().clone(), TrayCommand::ShowPairing),
+            (show_code.id().clone(), TrayCommand::ShowPairingCode),
             (devices.id().clone(), TrayCommand::PairedDevices),
             (autostart.id().clone(), TrayCommand::ToggleAutostart),
             (updates.id().clone(), TrayCommand::CheckUpdates),
@@ -106,7 +111,7 @@ fn tray_thread(
             .with_icon(icon)
             .build()?;
         // Keep the menu items alive as long as the icon.
-        Ok((tray, show, devices, autostart, updates, quit))
+        Ok((tray, show, show_code, devices, autostart, updates, quit))
     })();
     let keep = match built {
         Ok(k) => {
