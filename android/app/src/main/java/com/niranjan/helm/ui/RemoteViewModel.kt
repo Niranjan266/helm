@@ -506,30 +506,40 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Files, clipboard, screenshot ---------------------------------------------------
 
-    fun uploadUris(uris: List<Uri>) {
+    /** [drop] = files shared into Helm: with `g6`, a progress notification and `file.drop` after the upload. */
+    fun uploadUris(uris: List<Uri>, drop: Boolean = false) {
         if (uris.isEmpty()) return
         val c = conn ?: return message("Not connected.")
         viewModelScope.launch {
             var done = 0
+            var dropText: String? = null
             for ((i, uri) in uris.withIndex()) {
                 val prefix = if (uris.size > 1) "(${i + 1}/${uris.size}) " else ""
+                var task: com.niranjan.helm.device.FileDropTask? = null
                 try {
                     _ui.update { it.copy(transfer = TransferUi("${prefix}Preparing…", null)) }
                     val f = withContext(Dispatchers.IO) { controller.files.describe(uri) }
                     _ui.update { it.copy(transfer = TransferUi("$prefix${f.name}", 0f)) }
-                    c.uploadFile(f.name, f.size, f.sha256, { controller.files.open(uri) }) { sent ->
+                    if (drop) task = com.niranjan.helm.device.FileDropTask.begin(getApplication<Application>(), c, f.name, i)
+                    val path = c.uploadFile(f.name, f.size, f.sha256, { controller.files.open(uri) }) { sent ->
                         val p = if (f.size == 0L) 1f else sent.toFloat() / f.size
                         _ui.update { it.copy(transfer = TransferUi("$prefix${f.name}", p)) }
+                        task?.progress(sent, f.size)
                     }
+                    task?.let { dropText = it.finish(path) }
                     done++
                 } catch (e: HelmException) {
+                    task?.fail("Upload failed: ${friendly(e)}")
                     message("Upload failed: ${friendly(e)}")
                 } catch (e: Exception) {
+                    task?.fail("Could not read the file.")
                     message("Could not read the file: ${e.message}")
                 }
             }
             _ui.update { it.copy(transfer = null) }
-            if (done > 0) message(if (done == 1) "Sent to the PC's Downloads\\Helm." else "Sent $done files to the PC's Downloads\\Helm.")
+            val single = dropText
+            if (done == 1 && uris.size == 1 && single != null) message(single)
+            else if (done > 0) message(if (done == 1) "Sent to the PC's Downloads\\Helm." else "Sent $done files to the PC's Downloads\\Helm.")
         }
     }
 
@@ -548,7 +558,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        uploadUris(files)
+        uploadUris(files, drop = true)
     }
 
     fun discardPendingShare() {

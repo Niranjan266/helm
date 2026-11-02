@@ -117,6 +117,7 @@ fun PcDetails(
     onDisconnect: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            PcHealthCard()
             InfoCard("Ping") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = onPing, enabled = !ui.pingBusy) { Text("Ping") }

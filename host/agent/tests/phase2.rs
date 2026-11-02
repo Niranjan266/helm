@@ -305,7 +305,7 @@ async fn stream_socket_rejects_pair_and_needs_stream_open() {
         .await
         .unwrap();
     let hello = recv(&mut ws).await;
-    assert_eq!(hello["features"], json!(["p1", "p2", "p3", "p4", "p5"]));
+    assert_eq!(hello["features"], json!(["p1", "p2", "p3", "p4", "p5", "g6"]));
     send(&mut ws, phone.pair_msg(&hello, &token)).await;
     expect_error(&mut ws, "bad_message").await;
     assert!(server.devices().unwrap().is_empty(), "nothing paired via /stream");

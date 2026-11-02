@@ -22,6 +22,19 @@ grant capabilities), Triggers editor, and Home Assistant (connection, states, `h
 Every p3/p4/p5 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 
+Everyday (g6, [`Docs/protocol/everyday.md`](../Docs/protocol/everyday.md)): Clipboard history
+(list, on/off + encrypted persist, copy to phone / share / copy on PC, delete, clear; refreshes
+on `clipboard.history.changed`), quick file drop (files shared to Helm get a progress
+notification and `file.drop` with the "When a file arrives on the PC" setting: open / save /
+reveal), Find my phone (`phone.ring` -> full-screen alarm on the alarm stream at full volume,
+vibration, flashing screen and torch until "Found it"; "Ring another phone" screen), PC
+notifications (Settings toggle, off by default; per-app filter, every app off until enabled or
+"All apps"; channel "PC notifications"), a Schedules editor (time, Mon..Sun or one-off date,
+deck or power action) and a PC health line/card (battery, CPU temperature, system drive, uptime;
+every 60 s). New code: `core/EverydayModels.kt`, `core/HelmApiG6.kt`, `device/EverydayBackground.kt`,
+`device/PhoneRinger.kt`, `device/RingActivity.kt`, `ui/EverydayViewModel.kt` and the screens.
+Every g6 call is gated on the hello feature.
+
 ## Layout
 
 ```
@@ -105,6 +118,12 @@ adb shell am start -a android.intent.action.VIEW -d "'helm://pair?v=1&id=...&t=.
   plugins, triggers (unknown kept), HA states and the `ha` deck action.
 - `Phase5ConnectionTest` — every §13 method against the FakeAgent (term output/exit and
   `notify.action` events included) and `p5` gating.
+- `EverydayCodecTest` — clipboard items/pick, drop modes, ring events + alarm-volume
+  save/restore (fake volume), PC-notification access and per-app filter, schedule codec (unknown
+  actions kept, read-only fields not sent), health parsing and formatting.
+- `EverydayConnectionTest` — every g6 method against the FakeAgent (`FakeEveryday`): events
+  (`clipboard.history.changed`, `phone.ring`, `pc.notification`, `schedule.changed`/`ran`),
+  `forbidden` power schedules, and `g6` gating (`unsupported`, nothing sent).
 - `RelayTunnelTest` — a fake relay (MockWebServer + mux framing) in front of a TLS FakeAgent:
   LAN-fail -> relay auth with real pinned TLS, 700 KB download through the tunnel, the relay
   sees no plaintext, pin mismatch, host offline (404), `/stream` over relay, pairing refused.

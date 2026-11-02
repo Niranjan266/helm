@@ -243,6 +243,32 @@ impl Platform for RealPlatform {
     fn utc_offset_minutes(&self) -> i32 {
         super::real5::utc_offset_minutes()
     }
+
+    // ---- g6 ----
+    #[cfg(windows)]
+    fn clipboard_history_allowed(&self) -> PResult<bool> {
+        super::real_g6::clipboard_history_allowed()
+    }
+    #[cfg(windows)]
+    fn reveal_in_explorer(&self, path: &Path) -> PResult<()> {
+        super::real_g6::reveal_in_explorer(path)
+    }
+    #[cfg(windows)]
+    fn pc_notify_access(&self) -> PResult<super::NotifyAccess> {
+        Ok(super::real_g6::notify_access())
+    }
+    #[cfg(windows)]
+    fn pc_notifications(&self) -> PResult<Vec<super::PcNotification>> {
+        super::real_g6::notifications()
+    }
+    #[cfg(windows)]
+    fn cpu_temp_c(&self) -> PResult<Option<f32>> {
+        Ok(super::real_g6::cpu_temp_c())
+    }
+    #[cfg(windows)]
+    fn system_uptime_s(&self) -> PResult<u64> {
+        Ok(super::real_g6::uptime_s())
+    }
 }
 
 // ---- Phase 3 helpers ----
