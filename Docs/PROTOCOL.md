@@ -315,6 +315,9 @@ frames. Toast body click → `notify.action{action_id:null}`; reply button id is
 Every `term.*` call and `ha.config.set` is written to `audit.log` (term.write logs byte counts only). Android sends its own
 notifications through `notify.push` only when the user enables "Mirror notifications" for an app.
 
+Everyday features (feature `g6`: clipboard history, quick file drop, find my phone, PC
+notifications, schedules, health card) are specified in [`protocol/everyday.md`](protocol/everyday.md).
+
 ## 14. Storage on the PC
 
 `%APPDATA%\Helm\` (overridable for tests):
