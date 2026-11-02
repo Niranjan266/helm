@@ -243,6 +243,10 @@ impl Platform for RealPlatform {
     fn utc_offset_minutes(&self) -> i32 {
         super::real5::utc_offset_minutes()
     }
+    #[cfg(windows)]
+    fn presenter(&self) -> Arc<crate::present::PresentHub> {
+        crate::present::win::hub()
+    }
 }
 
 // ---- Phase 3 helpers ----

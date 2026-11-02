@@ -220,6 +220,14 @@ a pen, shows a toast, reads Wi-Fi or makes an HTTP request on the real PC.
   agent's rustls (ring, webpki roots), one request per connection, no redirects, bounded
   bodies; `http://` goes to the crate's std client.
 
+## G2 — presentation mode (`"g2"` feature)
+
+[`Docs/protocol/presentation.md`](../../Docs/protocol/presentation.md). `present/mod.rs` holds the
+logic (app detection, keys per app, `lp` parsing, the per-PC `PresentHub`), `present/overlay.rs`
+the laser drawing (premultiplied BGRA canvas, dirty rectangles), `present/win.rs` this PC's
+backend (PowerPoint via late-bound `IDispatch`, one layered click-through overlay thread) and
+`present/fake.rs` the test double used by `tests/presentation.rs`.
+
 ## Firewall
 
 The first time it runs, Windows Defender Firewall asks whether to allow `helm-agent`.

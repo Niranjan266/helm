@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
@@ -70,7 +71,7 @@ import com.niranjan.helm.core.ConnectionState
 import com.niranjan.helm.device.Settings
 import kotlinx.coroutines.launch
 
-enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean, val p3: Boolean = false, val p5: Boolean = false) {
+enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean, val p3: Boolean = false, val p5: Boolean = false, val g2: Boolean = false) {
     DOCK("Dock", Icons.Filled.Home, true),
     APPS("Apps", Icons.Filled.Search, true),
     TOUCHPAD("Touchpad", Icons.Filled.Create, true),
@@ -87,6 +88,7 @@ enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean
     TRIGGERS("Triggers", Icons.Filled.DateRange, false, p5 = true),
     HOME_ASSISTANT("Home Assistant", Icons.Filled.Place, false, p5 = true),
     PLUGINS("Plugins", Icons.Filled.AddCircle, false, p5 = true),
+    PRESENT("Presentation", Icons.Filled.Face, false, g2 = true),
     FILES("Files & sharing", Icons.Filled.Share, false),
     SECURITY("Devices & security", Icons.Filled.Lock, false),
     SETTINGS("Settings", Icons.Filled.Settings, false),
@@ -163,11 +165,11 @@ fun RemoteShell(
 
     ModalNavigationDrawer(
         drawerState = drawer,
-        gesturesEnabled = drawer.isOpen || (screen != Screen.TOUCHPAD && screen != Screen.SCREEN && screen != Screen.TERMINAL),
+        gesturesEnabled = drawer.isOpen || (screen != Screen.TOUCHPAD && screen != Screen.SCREEN && screen != Screen.TERMINAL && screen != Screen.PRESENT),
         drawerContent = {
             ModalDrawerSheet(Modifier.verticalScroll(rememberScrollState())) {
                 Text(session.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(24.dp))
-                Screen.entries.filter { (!it.p3 || remoteUi.phase3) && (!it.p5 || remoteUi.phase5) }.forEach { s ->
+                Screen.entries.filter { (!it.p3 || remoteUi.phase3) && (!it.p5 || remoteUi.phase5) && (!it.g2 || com.niranjan.helm.core.PresentFeature.G2 in session.connection.hostFeatures) }.forEach { s ->
                     NavigationDrawerItem(
                         label = { Text(s.label) },
                         icon = { Icon(s.icon, contentDescription = null) },
@@ -275,6 +277,7 @@ fun RemoteShell(
                                 Screen.TRIGGERS -> TriggersScreen(extras)
                                 Screen.HOME_ASSISTANT -> HomeAssistantScreen(extras, remote)
                                 Screen.PLUGINS -> PluginsScreen(extras)
+                                Screen.PRESENT -> PresentationScreen(snackbar)
                                 Screen.SECURITY -> SecurityScreen(main, power)
                                 Screen.DOCK -> DockScreen(remote, settings, landscape, onOpenApps = { go(Screen.APPS) })
                                 Screen.APPS -> AppsScreen(remote)

@@ -51,6 +51,7 @@ app/src/main/java/com/niranjan/helm/
                         plugins, triggers, Home Assistant states
     TermScreen.kt       VT100/xterm screen model (SGR colours, cursor, erase, scrollback)
     HelmApiP5.kt        feature-gated calls for every §13 method + pen tilt maths
+    Presentation.kt     G2 (`g2`): present.* calls, `lp` frames, tilt→laser maths, talk timer
   device/   Android pieces: Keystore signer, stores, NSD discovery, settings, icon disk cache,
             content-URI reading and gallery/Downloads saving, VideoDecoder (MediaCodec ->
             SurfaceView) and AudioPlayer (Opus MediaCodec -> low-latency AudioTrack)

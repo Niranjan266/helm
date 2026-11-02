@@ -23,6 +23,8 @@ pub mod fs;
 pub mod monitor;
 // Phase 5
 pub mod extras;
+// G2: presentation mode
+pub mod present;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -42,6 +44,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(desktop::DesktopModule),
         Arc::new(fs::FsModule),
         Arc::new(extras::ExtrasModule),
+        Arc::new(present::PresentModule),
     ]
 }
 

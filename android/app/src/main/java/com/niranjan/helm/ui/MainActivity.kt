@@ -36,6 +36,11 @@ class MainActivity : FragmentActivity() {
     private val power: PowerViewModel by viewModels()
     private val extras: ExtrasViewModel by viewModels()
 
+    /** G2: volume keys change slides while the Presentation screen is open. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        VolumeKeys.dispatch(event.keyCode, event.action == android.view.KeyEvent.ACTION_DOWN, event.repeatCount) ||
+            super.dispatchKeyEvent(event)
+
     /** Fingerprint / screen-lock check before admin actions (per-PC setting). */
     private val adminGate by lazy {
         AdminGate(
