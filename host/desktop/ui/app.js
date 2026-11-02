@@ -36,7 +36,7 @@
     return node;
   }
 
-  const state = { page: 'home', status: null, phones: [], pairing: null, pairingAt: 0, activity: [], settings: null };
+  const state = { page: 'home', status: null, phones: [], pairing: null, pairingAt: 0, activity: [], settings: null, code: null, codeAt: 0, approvals: [] };
 
   // ------------------------------------------------------------------ helpers
   function toast(text, tone) {
@@ -107,6 +107,7 @@
     if (page === 'activity') loadActivity();
     if (page === 'settings') loadSettings();
     if (page === 'pair' || page === 'home') loadPairing();
+    if (page === 'pair') loadCode();
   }
 
   document.addEventListener('click', (e) => {
@@ -191,6 +192,22 @@
     return b;
   }
 
+  function ringButton(p) {
+    const b = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'Ring this phone', title: 'Plays a loud sound on the phone so you can find it' });
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        await call('ring_phone', { deviceId: p.device_id });
+        toast(`${p.name} is ringing. Open Helm on it to stop.`);
+      } catch {
+        /* call() already showed the reason */
+      } finally {
+        b.disabled = false;
+      }
+    });
+    return b;
+  }
+
   function renderPhones() {
     const list = state.phones;
     const home = $('#home-phones');
@@ -217,6 +234,7 @@
         el('span', { class: 'phone-name' }, p.name,
           el('span', { class: 'muted', text: `  ·  paired ${new Date(p.paired_at_ms).toLocaleDateString()}` })),
         el('span', { class: 'phone-meta', text: phoneStatus(p), title: p.peer || '' }),
+        p.online ? ringButton(p) : null,
         tierSelect(p),
         revokeButton(p)));
     }
@@ -268,6 +286,91 @@
     renderPairing();
   }
 
+  // ------------------------------------------------------------------ 6-digit code
+  function codeRemaining() {
+    const c = state.code;
+    return c ? Math.max(0, c.expires_in_s - Math.floor((Date.now() - state.codeAt) / 1000)) : 0;
+  }
+
+  function renderCode() {
+    const c = state.code;
+    const remaining = codeRemaining();
+    const expired = !c || remaining <= 0;
+    const running = state.status && state.status.run === 'running';
+    $('#code-panel').hidden = !c;
+    $('#code-panel').dataset.state = expired ? 'expired' : 'live';
+    if (c) {
+      $('#code-digits').textContent = c.code;
+      $('#code-host').textContent = c.host_name;
+    }
+    const label = !c ? '—' : expired ? 'Expired' : `Expires ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, '0')}`;
+    for (const e of $$('[data-code-expires]')) {
+      e.textContent = label;
+      e.dataset.state = expired && c ? 'expired' : '';
+    }
+    $('#code-btn').textContent = c ? 'New code' : 'Use a 6-digit code instead';
+    $('#code-btn').disabled = !running;
+  }
+
+  function setCode(c) {
+    state.code = c || null;
+    state.codeAt = Date.now();
+    renderCode();
+  }
+
+  async function loadCode() {
+    setCode(await invoke('get_code_pairing').catch(() => null));
+  }
+
+  // ------------------------------------------------------------------ approve new phones
+  function approvalCard(a) {
+    const left = () => Math.max(0, Math.round((a.expires_unix_ms - Date.now()) / 1000));
+    const timer = el('span', { class: 'expires', text: `${left()} s left` });
+    const answer = async (allow, btns) => {
+      btns.forEach((b) => { b.disabled = true; });
+      try {
+        const done = await call('resolve_pairing', { requestId: a.request_id, allow });
+        toast(!done ? 'That request already ended.' : allow ? `${a.device_name} was allowed.` : `${a.device_name} was denied.`);
+      } catch {
+        btns.forEach((b) => { b.disabled = false; });
+      }
+      loadApprovals();
+    };
+    const allow = el('button', { type: 'button', class: 'btn btn-primary', text: 'Allow' });
+    const deny = el('button', { type: 'button', class: 'btn btn-ghost btn-danger', text: 'Deny' });
+    allow.addEventListener('click', () => answer(true, [allow, deny]));
+    deny.addEventListener('click', () => answer(false, [allow, deny]));
+    timer.dataset.expiresAt = String(a.expires_unix_ms);
+    const how = a.method === 'code' ? 'with the 6-digit code' : 'with the QR code';
+    return el('div', { class: 'approval-card' },
+      el('div', { class: 'card-head' }, el('span', { text: 'A new phone wants to pair' }), timer),
+      el('div', { class: 'approval-body' },
+        el('div', { class: 'approval-text' },
+          el('strong', { text: a.device_name || 'A phone' }),
+          el('span', { class: 'muted', text: `Pairing ${how} from ${(a.peer || '').replace(/:\d+$/, '') || 'the network'}. Only allow a phone you hold.` })),
+        el('div', { class: 'actions-row' }, allow, deny)));
+  }
+
+  function renderApprovals() {
+    const box = $('#approvals');
+    box.replaceChildren(...state.approvals.map(approvalCard));
+    box.hidden = state.approvals.length === 0;
+  }
+
+  function tickApprovals() {
+    for (const t of $$('#approvals [data-expires-at]')) {
+      const s = Math.max(0, Math.round((Number(t.dataset.expiresAt) - Date.now()) / 1000));
+      t.textContent = `${s} s left`;
+    }
+  }
+
+  async function loadApprovals() {
+    const list = await invoke('get_pending_pairings').catch(() => null);
+    if (!list) return;
+    state.approvals = list;
+    renderApprovals();
+  }
+
   // ------------------------------------------------------------------ activity
   function renderActivity() {
     const rows = state.activity;
@@ -308,7 +411,19 @@
     if (document.activeElement !== $('#s-port')) $('#s-port').value = s.port;
     if (document.activeElement !== $('#s-relay-url')) $('#s-relay-url').value = s.relay_url;
     $('#s-relay-on').checked = s.relay_enabled;
+    $('#s-approval').checked = s.require_approval;
   }
+
+  $('#s-approval').addEventListener('change', async (e) => {
+    const want = e.target.checked;
+    try {
+      const now = await call('set_require_approval', { on: want });
+      e.target.checked = now;
+      toast(now ? 'Helm will ask before a new phone pairs.' : 'New phones will pair without asking.');
+    } catch {
+      e.target.checked = !want;
+    }
+  });
 
   $('#s-autostart').addEventListener('change', async (e) => {
     const want = e.target.checked;
@@ -326,6 +441,9 @@
     'new-code': async () => {
       const p = await call('new_pairing');
       setPairing(p);
+    },
+    'new-pair-code': async () => {
+      setCode(await call('new_code_pairing'));
     },
     'copy-link': async () => {
       const p = state.pairing;
@@ -394,16 +512,18 @@
     if (kind === 'phones') loadPhones();
     if (kind === 'activity') loadActivity();
     if (kind === 'pairing') loadPairing();
+    if (kind === 'code') loadCode();
+    if (kind === 'approvals') loadApprovals();
   });
   listen('helm://navigate', (e) => go(String(e.payload)));
 
-  setInterval(renderPairing, 1000);
+  setInterval(() => { renderPairing(); renderCode(); tickApprovals(); }, 1000);
   setInterval(() => { if (!document.hidden) loadStatus(); }, 5000);
   setInterval(() => { if (!document.hidden && state.page !== 'activity') renderPhones(); }, 60000);
 
   (async () => {
     await loadStatus();
-    await Promise.all([loadPhones(), loadActivity(), loadPairing(), loadSettings()]);
+    await Promise.all([loadPhones(), loadActivity(), loadPairing(), loadSettings(), loadCode(), loadApprovals()]);
     go(location.hash.slice(1) || 'home');
   })();
 
@@ -424,11 +544,13 @@
         { device_id: 'b', name: 'Galaxy Tab', tier: 'remote', paired_at_ms: now - 2e9, last_seen_ms: now - 9e7, online: false, via: null, peer: null },
       ],
       get_pairing: null,
+      get_code_pairing: null,
+      get_pending_pairings: [],
       get_activity: [
         { time: new Date(now - 6e4).toISOString(), event: 'auth_ok', device_id: 'a', device_name: 'Pixel 8', peer: '192.168.0.42:5555', detail: '', text: 'Pixel 8 connected' },
         { time: new Date(now - 3e6).toISOString(), event: 'pair_fail', device_id: null, device_name: null, peer: '192.168.0.50:4000', detail: 'bad_token', text: 'Pairing refused (bad token)' },
       ],
-      get_settings: { autostart: false, autostart_key: 'HKCU\\…\\Run', port: 47820, relay_enabled: false, relay_url: '', data_dir: '', version: '0.1.0' },
+      get_settings: { require_approval: false, autostart: false, autostart_key: 'HKCU\\…\\Run', port: 47820, relay_enabled: false, relay_url: '', data_dir: '', version: '0.1.0' },
     };
     if (cmd in sample) return sample[cmd];
     throw new Error('Preview only: not connected to Helm.');

@@ -1,6 +1,6 @@
 [package]
 name = "helm-desktop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Helm for Windows: desktop window + tray that runs the Helm agent in-process"
 license = "MIT"
