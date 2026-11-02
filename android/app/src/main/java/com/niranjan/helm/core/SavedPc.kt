@@ -94,6 +94,18 @@ object EndpointPlanner {
         return out.toList()
     }
 
+    /** g4 code pairing: the PC found by mDNS, pinned to the fingerprint the code proved. */
+    fun savedFromCodePairing(host: DiscoveredHost, ready: ReadyInfo, nowMs: Long): SavedPc = SavedPc(
+        hostId = host.hostId,
+        name = ready.hostName.ifBlank { host.name },
+        addresses = listOf(host.address),
+        port = host.port,
+        fingerprint = requireNotNull(ready.fingerprint) { "code pairing must prove a fingerprint" },
+        lastAddress = ready.endpoint.host,
+        lastPort = ready.endpoint.port,
+        lastUsedMs = nowMs,
+    )
+
     fun savedFromPairing(uri: PairingUri, ready: ReadyInfo, nowMs: Long): SavedPc = SavedPc(
         hostId = uri.hostId,
         name = ready.hostName.ifBlank { uri.hostName },

@@ -52,6 +52,7 @@ data class SessionUi(
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val controller = (app as HelmApp).controller
+    private val usedCodes = com.niranjan.helm.core.UsedCodes()
 
     val savedPcs: StateFlow<List<SavedPc>> = controller.savedPcs.pcs
     val discovered: StateFlow<Map<String, DiscoveredHost>> = controller.discovery.hosts
@@ -97,12 +98,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** g4 short-code pairing. Returns an error message, or null if pairing started. */
+    fun pairWithCode(host: DiscoveredHost, code: String): String? {
+        if (com.niranjan.helm.core.CodePairingCrypto.parseCode(code) == null) return "Enter the 6-digit code shown on the PC."
+        if (!usedCodes.tryUse(host.hostId, code)) return "That code was already tried. Show a new code on the PC."
+        controller.startCodePairing(host, code)
+        return null
+    }
+
     fun connect(pc: SavedPc) = controller.connectSaved(pc)
 
     fun retry() {
         val s = controller.session.value ?: return
         if (s.isPairing) {
-            message("Pairing links work once. Scan a fresh QR code on the PC.")
+            message("Pairing links and codes work once. Show a fresh QR code or code on the PC.")
             controller.disconnect()
         } else {
             controller.savedPcs.get(s.hostId)?.let { controller.connectSaved(it) }

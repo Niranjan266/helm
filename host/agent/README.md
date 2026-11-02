@@ -220,6 +220,18 @@ a pen, shows a toast, reads Wi-Fi or makes an HTTP request on the real PC.
   agent's rustls (ring, webpki roots), one request per connection, no redirects, bounded
   bodies; `http://` goes to the crate's std client.
 
+## G4 — pairing security (`"g4"` feature)
+
+[`Docs/protocol/pairing-security.md`](../../Docs/protocol/pairing-security.md). `g4/code.rs` is
+the pure part (HMAC-SHA256 digit commitments bound to the certificate fingerprint, code
+single use, 3-failure / 10-minute lockout); `g4/mod.rs` runs the `pair_code` exchange, the
+"ask before a new phone pairs" wait (`pair_pending`, 60 s, toast with Allow / Deny through
+`Platform::show_toast`, setting in `pairing.json`, methods `pairing.settings.get/set`) and the
+`HostEvent` broadcast for PC-side UIs (`state.g4.subscribe()`, `new_code_pairing()`,
+`g4.resolve(id, allow)`). Console: `c` = code, `y`/`n` = allow/deny, `ask on|off`; tray:
+**Show pairing code**. `net.rs` puts USB tethering adapters (RNDIS/NCM/Apple) first in the
+pairing link and re-reads addresses for each new link. Tests: `tests/g4.rs` (fake platform).
+
 ## Firewall
 
 The first time it runs, Windows Defender Firewall asks whether to allow `helm-agent`.

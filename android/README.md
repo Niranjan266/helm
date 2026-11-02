@@ -51,6 +51,9 @@ app/src/main/java/com/niranjan/helm/
                         plugins, triggers, Home Assistant states
     TermScreen.kt       VT100/xterm screen model (SGR colours, cursor, erase, scrollback)
     HelmApiP5.kt        feature-gated calls for every §13 method + pen tilt maths
+    CodePairing.kt      g4 code pairing crypto + phone state machine, recording TLS
+                        transport, app lock timer (Docs/protocol/pairing-security.md)
+    HelmApiG4.kt        pairing.settings.get/set
   device/   Android pieces: Keystore signer, stores, NSD discovery, settings, icon disk cache,
             content-URI reading and gallery/Downloads saving, VideoDecoder (MediaCodec ->
             SurfaceView) and AudioPlayer (Opus MediaCodec -> low-latency AudioTrack)
@@ -108,6 +111,9 @@ adb shell am start -a android.intent.action.VIEW -d "'helm://pair?v=1&id=...&t=.
 - `RelayTunnelTest` — a fake relay (MockWebServer + mux framing) in front of a TLS FakeAgent:
   LAN-fail -> relay auth with real pinned TLS, 700 KB download through the tunnel, the relay
   sees no plaintext, pin mismatch, host offline (404), `/stream` over relay, pairing refused.
+- `CodePairingTest` — g4: interop vector shared with the agent, HMAC, code parsing, digit-by-
+  digit checks, code pairing over real TLS (fingerprint proven), wrong code / MITM certificate
+  rejected, `pair_pending` wait, old agents refused, app lock timer.
 - `E2eRealAgentTest` — **opt-in**, skipped unless `HELM_E2E_URI` is set (below).
 
 ## Opt-in end-to-end test against the real PC agent

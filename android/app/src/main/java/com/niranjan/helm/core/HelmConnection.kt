@@ -68,6 +68,15 @@ sealed interface HandshakeMode {
     }
 
     data object Auth : HandshakeMode
+
+    /**
+     * g4 short-code pairing (Docs/protocol/pairing-security.md): the 6-digit code shown on the
+     * PC. The transport must be a [FingerprintObserver]; the observed certificate is trusted only
+     * after the code exchange proves it, and is then returned in [ReadyInfo.fingerprint].
+     */
+    data class PairCode(val code: String) : HandshakeMode {
+        override fun toString(): String = "PairCode(code=***)"
+    }
 }
 
 sealed interface ConnectionState {
@@ -92,6 +101,8 @@ data class ReadyInfo(
     val features: Set<String> = emptySet(),
     /** True when this session runs inside a relay tunnel (§12). */
     val viaRelay: Boolean = false,
+    /** g4 code pairing: the PC certificate fingerprint the code exchange proved (pin it). */
+    val fingerprint: String? = null,
 )
 
 /** An `event` message from the agent (PROTOCOL.md §6, §9.4). */
@@ -121,6 +132,9 @@ object LocalCodes {
     const val TRANSFER_FAILED = "transfer_failed"
     const val BAD_STREAM = "bad_stream"
     const val UNSUPPORTED = "unsupported"
+
+    /** g4: the PC's code proof did not match (wrong code, or someone in the middle). */
+    const val BAD_CODE = "bad_code"
 }
 
 /**
@@ -159,6 +173,7 @@ class HelmConnection(
         require(mode is HandshakeMode.Auth || path == Endpoint.CONTROL_PATH) { "pairing is only allowed on the control socket" }
         require(mode is HandshakeMode.Auth || (relay == null && !transport.relayed)) { "pairing is never allowed over the relay" }
         require(relay == null || relay.relayed) { "relay transport must be relayed" }
+        require(mode !is HandshakeMode.PairCode || transport is FingerprintObserver) { "code pairing needs a FingerprintObserver transport" }
     }
 
     private class Route(val endpoint: Endpoint, val transport: HelmTransport)
@@ -177,6 +192,11 @@ class HelmConnection(
 
     /** Events with one [name] only. */
     fun events(name: String): Flow<HelmEvent> = events.filter { it.name == name }
+
+    private val _approvalPending = MutableStateFlow(false)
+
+    /** g4: the PC asked its owner to Allow / Deny this pairing (`pair_pending`); still waiting. */
+    val approvalPending: StateFlow<Boolean> = _approvalPending.asStateFlow()
 
     private val started = AtomicBoolean(false)
     private val closedByUser = AtomicBoolean(false)
@@ -230,9 +250,10 @@ class HelmConnection(
             _state.value = ConnectionState.Connecting(endpoint)
             val events = Channel<WsEvent>(Channel.UNLIMITED)
             val request = Request.Builder().url(endpoint.url(route.transport.scheme, path)).build()
+            (route.transport as? FingerprintObserver)?.resetObserved()
             val ws = client.newWebSocket(request, ChannelListener(events))
             socket = ws
-            when (val attempt = handshake(ws, events, endpoint)) {
+            when (val attempt = handshake(ws, events, endpoint, route.transport as? FingerprintObserver)) {
                 is Attempt.Success -> {
                     readyInfo = attempt.info.copy(viaRelay = route.transport.relayed)
                     hostFeatures = attempt.info.features
@@ -265,7 +286,12 @@ class HelmConnection(
         return e
     }
 
-    private suspend fun handshake(ws: WebSocket, events: Channel<WsEvent>, endpoint: Endpoint): Attempt {
+    private suspend fun handshake(
+        ws: WebSocket,
+        events: Channel<WsEvent>,
+        endpoint: Endpoint,
+        observer: FingerprintObserver? = null,
+    ): Attempt {
         // 1. Wait for `hello` (agent speaks first). Anything that fails before a first message
         //    means "no Helm agent reachable here" -> try the next endpoint.
         val first = withTimeoutOrNull(helloTimeoutMs) { nextMessage(events) }
@@ -303,8 +329,44 @@ class HelmConnection(
             )
         }
 
-        // 2. Answer with exactly one pair or auth.
+        val helloFeatures = (hello["features"] as? JsonArray).orEmpty()
+            .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+            .toSet()
+        var codePhone: CodePairingPhone? = null
+        var codeFingerprint: String? = null
+
+        // 2. Answer with exactly one pair, pair_code or auth.
         val answer = when (mode) {
+            is HandshakeMode.PairCode -> {
+                _state.value = ConnectionState.Pairing
+                if (Features.G4 !in helloFeatures) {
+                    return Attempt.Stop(
+                        HelmException(LocalCodes.UNSUPPORTED, "Helm on this PC is too old for code pairing. Update it, or pair with the QR code."),
+                    )
+                }
+                val digits = CodePairingCrypto.parseCode(mode.code)
+                    ?: return Attempt.Stop(HelmException(LocalCodes.BAD_CODE, "The pairing code has 6 digits."))
+                val fp = observer?.observedFingerprint()
+                    ?: return Attempt.Stop(HelmException(LocalCodes.UNREACHABLE, "Could not read the PC's certificate."))
+                val noncePhone = HelmSigning.b64(ByteArray(32).also { java.security.SecureRandom().nextBytes(it) })
+                val publicKey = Base64.getEncoder().encodeToString(identity.signer.publicKeySpki())
+                val h = CodePairingCrypto.transcriptHash(helloHostId, nonce, noncePhone, fp, identity.deviceId, publicKey)
+                val phone = CodePairingPhone(digits, h)
+                codePhone = phone
+                codeFingerprint = fp
+                buildJsonObject {
+                    put("type", "pair_code")
+                    put("device_id", identity.deviceId)
+                    put("device_name", identity.deviceName)
+                    put("public_key", publicKey)
+                    put("nonce", noncePhone)
+                    put("commits", JsonArray(phone.commitments.map { JsonPrimitive(HelmSigning.b64(it)) }))
+                    put(
+                        "signature",
+                        HelmSigning.signatureBase64(identity.signer, HelmSigning.PURPOSE_PAIR_CODE, helloHostId, nonce),
+                    )
+                }
+            }
             is HandshakeMode.Pair -> {
                 _state.value = ConnectionState.Pairing
                 buildJsonObject {
@@ -334,16 +396,27 @@ class HelmConnection(
         if (!ws.send(answer.toString())) {
             return Attempt.Stop(HelmException(LocalCodes.CONNECTION_LOST, "Connection dropped during handshake."))
         }
+        codePhone?.let { phone -> codeExchange(ws, events, phone)?.let { return it } }
 
         // 3. Wait for ready / error (ignore anything else, e.g. future informational messages).
-        val obj: JsonObject = withTimeoutOrNull(readyTimeoutMs) {
-            var result: Incoming
+        //    `pair_pending` (g4): the PC owner is asked; wait as long as the PC says (+10 s).
+        var deadline = System.currentTimeMillis() + readyTimeoutMs
+        val obj: JsonObject = run {
+            var result: Incoming?
             while (true) {
-                result = nextMessage(events)
+                val left = deadline - System.currentTimeMillis()
+                result = if (left <= 0) null else withTimeoutOrNull(left) { nextMessage(events) }
                 if (result !is Incoming.Message) break
                 val t = result.obj?.str("type")
+                if (t == "pair_pending") {
+                    val waitS = (result.obj?.get("timeout_s") as? JsonPrimitive)?.longOrNull?.coerceIn(1, 600) ?: 60
+                    deadline = System.currentTimeMillis() + (waitS + 10) * 1000
+                    _approvalPending.value = true
+                    continue
+                }
                 if (result.obj == null || t == "ready" || t == "error") break
             }
+            _approvalPending.value = false
             result
         }.let { r ->
             when (r) {
@@ -377,11 +450,59 @@ class HelmConnection(
                 hostName = obj.str("host_name") ?: hello.str("host_name") ?: "PC",
                 endpoint = endpoint,
                 agentVersion = hello.str("agent_version"),
-                features = (hello["features"] as? JsonArray).orEmpty()
-                    .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-                    .toSet(),
+                features = helloFeatures,
+                fingerprint = codeFingerprint,
             ),
         )
+    }
+
+    /**
+     * g4: `code_commit`, then six rounds of PC opening -> check -> our opening. Returns null when
+     * every PC opening matched (the observed certificate is the PC's), else the failure.
+     */
+    private suspend fun codeExchange(ws: WebSocket, events: Channel<WsEvent>, phone: CodePairingPhone): Attempt? {
+        suspend fun next(): JsonObject? {
+            val r = withTimeoutOrNull(helloTimeoutMs) { nextMessage(events) }
+            return (r as? Incoming.Message)?.obj
+        }
+        val lost = Attempt.Stop(HelmException(LocalCodes.CONNECTION_LOST, "Connection dropped during pairing."))
+        val commit = next() ?: return lost
+        if (commit.str("type") == "error") return Attempt.Stop(agentError(commit))
+        val commits = (commit["commits"] as? JsonArray).orEmpty().mapNotNull {
+            runCatching { Base64.getDecoder().decode((it as JsonPrimitive).content) }.getOrNull()
+        }
+        if (commit.str("type") != "code_commit" || !phone.setAgentCommitments(commits)) {
+            return Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC sent an invalid code commitment."))
+        }
+        for (round in 1..CodePairingCrypto.DIGITS) {
+            val open = next() ?: return lost
+            if (open.str("type") == "error") return Attempt.Stop(agentError(open))
+            val r = open.str("r")?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
+            val i = (open["i"] as? JsonPrimitive)?.intOrNull
+            if (open.str("type") != "code_open" || i != round || r == null || !phone.checkAgentOpening(round, r)) {
+                ws.send(
+                    buildJsonObject {
+                        put("type", "error")
+                        put("code", LocalCodes.BAD_CODE)
+                        put("message", "code proof mismatch")
+                    }.toString(),
+                )
+                return Attempt.Stop(
+                    HelmException(
+                        LocalCodes.BAD_CODE,
+                        "The code did not match. Show a new code on the PC and try again. " +
+                            "If it keeps failing, another device on this network may be pretending to be the PC.",
+                    ),
+                )
+            }
+            val reply = buildJsonObject {
+                put("type", "code_open")
+                put("i", round)
+                put("r", HelmSigning.b64(phone.opening(round)))
+            }
+            if (!ws.send(reply.toString())) return lost
+        }
+        return if (phone.complete) null else lost
     }
 
     private sealed interface Incoming {

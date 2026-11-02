@@ -46,6 +46,9 @@ object HelmSigning {
     const val PURPOSE_PAIR = "pair"
     const val PURPOSE_AUTH = "auth"
 
+    /** g4 code pairing: proof of the device key in `pair_code`. */
+    const val PURPOSE_PAIR_CODE = "pair_code"
+
     /** `helm-v1|<purpose>|<host_id>|<nonce>` — nonce is the exact string from `hello`. */
     fun signedString(purpose: String, hostId: String, nonce: String): String =
         "helm-v1|$purpose|$hostId|$nonce"
