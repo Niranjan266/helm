@@ -71,7 +71,9 @@ impl Module for AppsModule {
             }
             "apps.launch" => {
                 let app_id = str_param(&params, "app_id")?.to_string();
-                blocking(move || p.launch_app(&app_id)).await?;
+                let id = app_id.clone();
+                blocking(move || p.launch_app(&id)).await?;
+                crate::g5::record_launch(&ctx.state, &app_id).await;
                 Ok(json!({}))
             }
             "open" => {

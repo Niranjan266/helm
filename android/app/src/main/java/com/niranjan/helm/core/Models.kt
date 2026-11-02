@@ -55,17 +55,22 @@ data class WindowEntry(
     }
 }
 
-/** A dock tile (§9.3): launches an app or opens a target. */
+/** A dock tile (§9.3): launches an app or opens a target; G5 adds folders and icons. */
 data class DockTile(
     val id: String,
     val kind: String,
     val appId: String? = null,
     val target: String? = null,
     val label: String? = null,
+    /** G5 folder contents (app/open tiles). */
+    val children: List<DockTile> = emptyList(),
+    /** G5 icon reference (see [IconRef]). */
+    val icon: String? = null,
 ) {
     companion object {
         const val KIND_APP = "app"
         const val KIND_OPEN = "open"
+        const val KIND_FOLDER = "folder"
     }
 }
 
@@ -73,26 +78,35 @@ data class DockTile(
 object DockCodec {
     fun decode(result: JsonObject): List<List<DockTile>> =
         (result["pages"] as? JsonArray).orEmpty().map { page ->
-            (page as? JsonArray).orEmpty().mapNotNull { el ->
-                val o = el as? JsonObject ?: return@mapNotNull null
-                val id = o.optStr("id") ?: return@mapNotNull null
-                val kind = o.optStr("kind") ?: return@mapNotNull null
-                DockTile(id, kind, o.optStr("app_id"), o.optStr("target"), o.optStr("label"))
-            }
+            (page as? JsonArray).orEmpty().mapNotNull { decodeTile(it, nested = false) }
         }
+
+    private fun decodeTile(el: kotlinx.serialization.json.JsonElement, nested: Boolean): DockTile? {
+        val o = el as? JsonObject ?: return null
+        val id = o.optStr("id") ?: return null
+        val kind = o.optStr("kind") ?: return null
+        val children = if (nested) emptyList() else o.objList("children").mapNotNull { decodeTile(it, nested = true) }
+        return DockTile(id, kind, o.optStr("app_id"), o.optStr("target"), o.optStr("label"), children, o.optStr("icon"))
+    }
+
+    private fun kotlinx.serialization.json.JsonObjectBuilder.tileFields(t: DockTile) {
+        put("id", t.id)
+        put("kind", t.kind)
+        t.appId?.let { put("app_id", it) }
+        t.target?.let { put("target", it) }
+        t.label?.let { put("label", it) }
+        t.icon?.let { put("icon", it) }
+        if (t.kind == DockTile.KIND_FOLDER) {
+            put("children", buildJsonArray { for (c in t.children) addJsonObject { tileFields(c) } })
+        }
+    }
 
     /** Params for `dock.set`. Null fields are omitted. */
     fun encode(pages: List<List<DockTile>>): JsonObject = buildJsonObject {
         put("pages", buildJsonArray {
             for (page in pages) {
                 add(buildJsonArray {
-                    for (t in page) addJsonObject {
-                        put("id", t.id)
-                        put("kind", t.kind)
-                        t.appId?.let { put("app_id", it) }
-                        t.target?.let { put("target", it) }
-                        t.label?.let { put("label", it) }
-                    }
+                    for (t in page) addJsonObject { tileFields(t) }
                 })
             }
         })
@@ -195,6 +209,8 @@ data class DeckButton(
     val stateBind: String? = null,
     /** Phase 3 live widget: `cpu`, `ram`, `clock` or `now_playing`. */
     val widget: String? = null,
+    /** G5 grid size: `1x1`, `2x1` or `2x2` ([ButtonSize]). */
+    val size: String = "1x1",
 )
 
 /** `deck.get` / `deck.set` JSON. */
@@ -285,6 +301,7 @@ object DeckCodec {
             action = decodeAction(o["action"]),
             stateBind = (o["state"] as? JsonObject)?.optStr("bind"),
             widget = widgetOf(o),
+            size = ButtonSize.of(o.optStr("size")).wire,
         )
     }
 
@@ -299,6 +316,7 @@ object DeckCodec {
                 put("action", encodeAction(b.action))
                 b.stateBind?.let { put("state", buildJsonObject { put("bind", it) }) }
                 b.widget?.let { put("widget", it) }
+                if (b.size != ButtonSize.ONE.wire) put("size", ButtonSize.of(b.size).wire)
             }
         })
     }
