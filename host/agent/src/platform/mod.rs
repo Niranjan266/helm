@@ -277,6 +277,13 @@ pub trait Platform: Send + Sync + Debug + 'static {
     fn wifi_ssid(&self) -> PResult<Option<String>>;
     /// Local time minus UTC, in minutes (time triggers).
     fn utc_offset_minutes(&self) -> i32;
+
+    // ---- G2 (presentation mode) ----
+
+    /// Presentation detection, PowerPoint automation and the laser overlay (one per PC).
+    fn presenter(&self) -> Arc<crate::present::PresentHub> {
+        crate::present::PresentHub::unsupported()
+    }
 }
 
 /// Collects [`Stats`] snapshots (blocking).
