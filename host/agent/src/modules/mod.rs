@@ -23,6 +23,8 @@ pub mod fs;
 pub mod monitor;
 // Phase 5
 pub mod extras;
+// g6 (everyday)
+pub mod everyday;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -43,6 +45,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(fs::FsModule),
         Arc::new(extras::ExtrasModule),
         Arc::new(crate::g4::PairingModule),
+        Arc::new(everyday::EverydayModule),
     ]
 }
 

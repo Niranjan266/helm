@@ -144,6 +144,9 @@ class FakeAgent(
     @Volatile var haConfig: Pair<String, String>? = null
     @Volatile var recording = false
 
+    /** Everyday (`g6`) methods and their state. */
+    val everyday = FakeEveryday()
+
     /** Bytes written to each open terminal (`term.write`), by term id. */
     val termInput = ConcurrentHashMap<Long, java.io.ByteArrayOutputStream>()
 
@@ -410,6 +413,12 @@ class FakeAgent(
                 "stream.stop", "stream.idr", "stream.config" -> {
                     streamCalls += msg.s("method")!!
                     ok(ws, id, JsonObject(emptyMap()))
+                }
+                in FakeEveryday.METHODS -> {
+                    val paths = uploaded.keys.map { "C:\\Users\\test\\Downloads\\Helm\\" + it }.toSet()
+                    val r = everyday.handle(msg.s("method")!!, params, deviceId, paths)
+                    if (r.result == null) reqError(ws, id, r.error ?: "bad_params", "g6 error") else ok(ws, id, r.result)
+                    for ((name, data) in r.events) event(ws, name, data)
                 }
                 in P3_METHODS, in P5_METHODS -> {
                     p3Calls += msg.s("method")!! to params

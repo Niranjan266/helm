@@ -50,6 +50,8 @@ helm-win-terminal = { path = "../crates/helm-win-terminal" }
 helm-win-pen = { path = "../crates/helm-win-pen" }
 helm-win-notify = { path = "../crates/helm-win-notify" }
 helm-plugins = { path = "../crates/helm-plugins" }
+# g6 (clipboard-history thumbnails)
+png = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 helm-win-capture = { path = "../crates/helm-win-capture" }
@@ -72,6 +74,13 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Time",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    # g6
+    "ApplicationModel",
+    "Foundation_Collections",
+    "UI_Notifications_Management",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
 ] }
 
 [dev-dependencies]

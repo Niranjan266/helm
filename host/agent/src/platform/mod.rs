@@ -34,6 +34,8 @@ use crate::router::RpcError;
 pub mod fake;
 pub mod real;
 mod real5;
+#[cfg(windows)]
+mod real_g6;
 
 pub type PResult<T> = Result<T, RpcError>;
 
@@ -277,6 +279,55 @@ pub trait Platform: Send + Sync + Debug + 'static {
     fn wifi_ssid(&self) -> PResult<Option<String>>;
     /// Local time minus UTC, in minutes (time triggers).
     fn utc_offset_minutes(&self) -> i32;
+
+    // ---- g6 (everyday, Docs/protocol/everyday.md). Defaults are inert. ----
+
+    /// False when the current clipboard content must not be recorded in the history
+    /// (password managers: `ExcludeClipboardContentFromMonitorProcessing`,
+    /// `Clipboard Viewer Ignore`, `CanIncludeInClipboardHistory` = 0).
+    fn clipboard_history_allowed(&self) -> PResult<bool> {
+        Ok(false)
+    }
+    /// Open Explorer with `path` selected (the agent already checked the path).
+    fn reveal_in_explorer(&self, _path: &std::path::Path) -> PResult<()> {
+        Err(RpcError::unsupported("reveal in Explorer is not available"))
+    }
+    /// Ask for / report access to Windows notifications.
+    fn pc_notify_access(&self) -> PResult<NotifyAccess> {
+        Ok(NotifyAccess::Unsupported)
+    }
+    /// Toast notifications currently in Action Center.
+    fn pc_notifications(&self) -> PResult<Vec<PcNotification>> {
+        Ok(Vec::new())
+    }
+    /// CPU / thermal-zone temperature in °C, if Windows exposes one.
+    fn cpu_temp_c(&self) -> PResult<Option<f32>> {
+        Ok(None)
+    }
+    /// Seconds since Windows started.
+    fn system_uptime_s(&self) -> PResult<u64> {
+        Err(RpcError::unsupported("uptime is not available"))
+    }
+}
+
+/// Access to Windows notifications (`UserNotificationListener`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyAccess {
+    Allowed,
+    Denied,
+    Unspecified,
+    Unsupported,
+}
+
+/// One Windows toast notification seen in Action Center.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PcNotification {
+    pub id: String,
+    pub app: String,
+    pub title: String,
+    pub body: String,
+    pub time_ms: u64,
 }
 
 /// Collects [`Stats`] snapshots (blocking).

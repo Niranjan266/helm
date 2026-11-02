@@ -55,6 +55,7 @@ fun SettingsScreen(
             Text("Unlock with fingerprint, face or screen lock. Admin actions still ask separately.", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
         }
         NotifyMirrorSettings(settings, onSettings)
+        EverydaySettingsSection()
         if (pcPrefs != null) {
             SectionCard("This PC on this phone") {
                 ToggleRow("Use the relay when not on the same network", pcPrefs.useRelay) { v -> onPcPrefs { it.copy(useRelay = v) } }
