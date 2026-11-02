@@ -1,19 +1,24 @@
 <#
 .SYNOPSIS
-    Builds a Helm release: bumps versions, runs every test, builds the agent, the service,
-    the Android APK and the Windows installer, and writes SHA256SUMS.
+    Builds a Helm release: bumps versions, runs every test, builds the desktop app (Helm.exe),
+    the console agent, the service, the Android APK and the Windows installers, and writes
+    SHA256SUMS.
 
 .DESCRIPTION
-    1. Sets the version in host/agent/Cargo.toml, host/crates/helm-service/Cargo.toml and
-       android/app/build.gradle.kts (versionName = -Version, versionCode + 1).
+    1. Sets the version in host/agent/Cargo.toml, host/desktop/Cargo.toml,
+       host/crates/helm-service/Cargo.toml and android/app/build.gradle.kts
+       (versionName = -Version, versionCode + 1).
     2. Runs scripts/test-all.ps1 (full, including clippy and the real-agent E2E) unless -SkipTests.
-    3. cargo build --release for host/agent and host/crates/helm-service.
+    3. cargo tauri build in host/desktop (Helm.exe + NSIS installer; installs tauri-cli if
+       missing), then cargo build --release for host/agent (console agent, for developers and
+       helm-service) and host/crates/helm-service.
     4. gradlew assembleRelease. The APK is left unsigned unless a keystore is configured with
        HELM_ANDROID_KEYSTORE, HELM_ANDROID_KEYSTORE_PASSWORD and HELM_ANDROID_KEY_ALIAS
        (optional HELM_ANDROID_KEY_PASSWORD); passwords are read by apksigner from the
        environment, never put on the command line.
     5. Compiles host/installer/helm.iss with Inno Setup's ISCC if it is installed.
-    6. Copies everything to dist/v<version>/ and writes dist/v<version>/SHA256SUMS.
+    6. Copies everything to dist/v<version>/ (Helm.exe as Helm-windows-x64.exe, the asset
+       scripts/install.ps1 downloads) and writes dist/v<version>/SHA256SUMS.
     7. Only with -Publish: `gh release create v<version>` with those files.
 
     Nothing is committed or tagged locally; commit and push the version bump yourself
@@ -41,6 +46,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
 
 $RepoRoot   = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $AgentDir   = Join-Path $RepoRoot 'host\agent'
+$DesktopDir = Join-Path $RepoRoot 'host\desktop'
 $ServiceDir = Join-Path $RepoRoot 'host\crates\helm-service'
 $AndroidDir = Join-Path $RepoRoot 'android'
 $Iss        = Join-Path $RepoRoot 'host\installer\helm.iss'
@@ -136,6 +142,7 @@ function Find-BuildTool([string]$Name) {
 # ---------------------------------------------------------------- 1. version bump
 Write-Stage "Setting version $Version"
 Set-CargoVersion (Join-Path $AgentDir 'Cargo.toml')
+Set-CargoVersion (Join-Path $DesktopDir 'Cargo.toml')
 Set-CargoVersion (Join-Path $ServiceDir 'Cargo.toml')
 Set-AndroidVersion (Join-Path $AndroidDir 'app\build.gradle.kts')
 
@@ -152,6 +159,20 @@ if ($SkipTests) {
 }
 
 # ---------------------------------------------------------------- 3. Rust binaries
+Write-Stage 'Building the desktop app (cargo tauri build)'
+$ErrorActionPreference = 'Continue'
+& cargo tauri --version *> $null
+$haveTauri = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = 'Stop'
+if (-not $haveTauri) {
+    Invoke-Native $RepoRoot 'cargo' @('install', 'tauri-cli', '--version', '^2', '--locked')
+}
+Invoke-Native $DesktopDir 'cargo' @('tauri', 'build')
+$desktopExe = Join-Path $DesktopDir 'target\release\Helm.exe'
+if (-not (Test-Path $desktopExe)) { throw "missing $desktopExe" }
+$nsisSetup = Get-ChildItem (Join-Path $DesktopDir 'target\release\bundle\nsis') -Filter "Helm_$($Version)_x64-setup.exe" -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+
 Write-Stage 'Building helm-agent and helm-service (release)'
 Invoke-Native $AgentDir 'cargo' @('build', '--release')
 Invoke-Native $ServiceDir 'cargo' @('build', '--release')
@@ -212,6 +233,12 @@ if ($iscc) {
 
 # ---------------------------------------------------------------- 6. dist + SHA256SUMS
 Write-Stage "Collecting artifacts in $Dist"
+Copy-Item $desktopExe (Join-Path $Dist 'Helm-windows-x64.exe')
+if ($nsisSetup) {
+    Copy-Item $nsisSetup.FullName (Join-Path $Dist 'Helm-windows-x64-setup.exe')
+} else {
+    Write-Host '  No NSIS installer from cargo tauri build: shipping Helm-windows-x64.exe only' -ForegroundColor Yellow
+}
 Copy-Item $agentExe   (Join-Path $Dist 'helm-agent.exe')
 Copy-Item $serviceExe (Join-Path $Dist 'helm-service.exe')
 

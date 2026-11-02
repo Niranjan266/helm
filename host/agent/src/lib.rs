@@ -51,4 +51,4 @@ pub mod util;
 pub mod wol;
 
 pub use pairing::Pairing;
-pub use server::{AppState, Config, DEFAULT_PORT, ServerHandle, default_data_dir, start};
+pub use server::{AgentEvent, AppState, Config, DEFAULT_PORT, ServerHandle, default_data_dir, start};

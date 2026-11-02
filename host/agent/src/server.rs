@@ -13,7 +13,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::WebSocketStream;
@@ -112,6 +112,23 @@ pub fn default_data_dir() -> PathBuf {
     }
 }
 
+/// Connection lifecycle, for in-process listeners such as the desktop app
+/// ([`AppState::subscribe_events`]). Security events also go to the audit log
+/// ([`AuditLog::subscribe`](crate::audit::AuditLog::subscribe)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentEvent {
+    /// A phone finished the handshake; its session is open.
+    Connected {
+        session_id: u64,
+        device_id: String,
+        tier: Tier,
+        /// `ip:port`, or `via=relay ch=<n>` for relayed connections.
+        peer: String,
+    },
+    /// That session ended.
+    Disconnected { session_id: u64, device_id: String },
+}
+
 /// Shared state of a running agent.
 pub struct AppState {
     pub identity: Identity,
@@ -146,6 +163,7 @@ pub struct AppState {
     stream_tokens: Mutex<TokenStore<Weak<ActiveStream>>>,
     pub(crate) stream_token_lifetime: Duration,
     next_stream: AtomicU64,
+    events: broadcast::Sender<AgentEvent>,
 }
 
 impl AppState {
@@ -207,6 +225,7 @@ impl AppState {
             stream_tokens: Mutex::new(TokenStore::new(config.stream_token_lifetime)),
             stream_token_lifetime: config.stream_token_lifetime,
             next_stream: AtomicU64::new(1),
+            events: broadcast::channel(64).0,
         })
     }
 
@@ -226,6 +245,11 @@ impl AppState {
             token,
             expires_at,
         }
+    }
+
+    /// Receive [`AgentEvent`]s from now on (slow receivers get `RecvError::Lagged`).
+    pub fn subscribe_events(&self) -> broadcast::Receiver<AgentEvent> {
+        self.events.subscribe()
     }
 
     /// Close every open session of `device_id` except `except`.
@@ -312,6 +336,10 @@ impl ServerHandle {
     }
     pub fn devices(&self) -> anyhow::Result<Vec<Device>> {
         self.state.devices.list()
+    }
+    /// Connection events of this server (see [`AgentEvent`]).
+    pub fn subscribe(&self) -> broadcast::Receiver<AgentEvent> {
+        self.state.subscribe_events()
     }
 
     /// Stop accepting, close open sessions, stop mDNS.
@@ -884,6 +912,12 @@ async fn run_session<S>(
         .unwrap_or_else(|p| p.into_inner())
         .insert(session_id, session.clone());
     crate::p5::session_started(&state, &device_id);
+    let _ = state.events.send(AgentEvent::Connected {
+        session_id,
+        device_id: device_id.clone(),
+        tier,
+        peer: peer.clone(),
+    });
     let ctx = RequestContext {
         device_id: device_id.clone(),
         tier,
@@ -960,6 +994,10 @@ async fn run_session<S>(
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .remove(&session_id);
+    let _ = state.events.send(AgentEvent::Disconnected {
+        session_id,
+        device_id: device_id.clone(),
+    });
     crate::p5::session_ended(&state, session_id, &device_id).await;
     session.finish().await;
     if !writer_done {
