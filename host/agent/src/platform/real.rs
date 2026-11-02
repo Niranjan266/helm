@@ -272,6 +272,10 @@ impl Platform for RealPlatform {
     fn system_uptime_s(&self) -> PResult<u64> {
         Ok(super::real_g6::uptime_s())
     }
+    #[cfg(windows)]
+    fn presenter(&self) -> Arc<crate::present::PresentHub> {
+        crate::present::win::hub()
+    }
 }
 
 // ---- Phase 3 helpers ----

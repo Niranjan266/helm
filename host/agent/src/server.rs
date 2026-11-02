@@ -1096,6 +1096,7 @@ async fn run_session<S>(
         device_id: device_id.clone(),
     });
     crate::p5::session_ended(&state, session_id, &device_id).await;
+    state.platform.presenter().session_ended(session_id);
     session.finish().await;
     if !writer_done {
         let _ = tx.send(Outgoing::Close(CloseCode::Normal, ""));

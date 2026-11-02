@@ -74,6 +74,7 @@ app/src/main/java/com/niranjan/helm/
     CodePairing.kt      g4 code pairing crypto + phone state machine, recording TLS
                         transport, app lock timer (Docs/protocol/pairing-security.md)
     HelmApiG4.kt        pairing.settings.get/set
+    Presentation.kt     G2 (`g2`): present.* calls, `lp` frames, tilt→laser maths, talk timer
   device/   Android pieces: Keystore signer, stores, NSD discovery, settings, icon disk cache,
             content-URI reading and gallery/Downloads saving, VideoDecoder (MediaCodec ->
             SurfaceView) and AudioPlayer (Opus MediaCodec -> low-latency AudioTrack)

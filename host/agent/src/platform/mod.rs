@@ -315,6 +315,12 @@ pub trait Platform: Send + Sync + Debug + 'static {
     fn system_uptime_s(&self) -> PResult<u64> {
         Err(RpcError::unsupported("uptime is not available"))
     }
+    // ---- G2 (presentation mode) ----
+
+    /// Presentation detection, PowerPoint automation and the laser overlay (one per PC).
+    fn presenter(&self) -> Arc<crate::present::PresentHub> {
+        crate::present::PresentHub::unsupported()
+    }
 }
 
 /// Access to Windows notifications (`UserNotificationListener`).

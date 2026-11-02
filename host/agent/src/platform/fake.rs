@@ -347,6 +347,8 @@ pub struct FakePlatform {
     pen_releases: Arc<AtomicU64>,
     toasts: Mutex<Vec<FakeToast>>,
     http: Arc<FakeHttp>,
+    // G2
+    present: crate::present::fake::FakePresenter,
 }
 
 struct FakeToast(Toast, Arc<ToastCallback>);
@@ -386,6 +388,11 @@ impl FakePlatform {
     /// Every call that would change something, in order (e.g. `launch_app:Fake.Notes`).
     pub fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// G2: the fake presentation backend (foreground app, PowerPoint, laser log).
+    pub fn present_fake(&self) -> Arc<crate::present::fake::FakePresent> {
+        self.present.fake()
     }
 
     /// Low-level input operations "sent" so far.
@@ -952,6 +959,9 @@ impl Platform for FakePlatform {
     }
     fn system_uptime_s(&self) -> PResult<u64> {
         Ok(self.state().system_uptime_s)
+    }
+    fn presenter(&self) -> Arc<crate::present::PresentHub> {
+        self.present.hub()
     }
 }
 

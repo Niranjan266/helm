@@ -214,6 +214,14 @@ impl Session {
         if frame.get("k").and_then(Value::as_str) == Some("pn") {
             return self.handle_pen(platform, &frame);
         }
+        if frame.get("k").and_then(Value::as_str) == Some("lp") {
+            // G2 laser pointer: on the monitor from `present.laser`, else like `ma`.
+            let hub = platform.presenter();
+            if let Err(code) = hub.frame(self.id, &frame, || self.pointer_rect(platform)) {
+                Self::report_input_error(&self.tx, &self.input_error, code);
+            }
+            return;
+        }
         let cmd = if frame.get("k").and_then(Value::as_str) == Some("ma") {
             let (Some(x), Some(y)) = (
                 frame.get("x").and_then(Value::as_f64),
