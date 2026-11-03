@@ -189,8 +189,11 @@ function Invoke-E2e {
         $tests = [int]$suite.tests; $fail = [int]$suite.failures
         $errs  = [int]$suite.errors; $skip = [int]$suite.skipped
         $note  = "tests=$tests failures=$fail errors=$errs skipped=$skip"
-        if ($ok -and $tests -gt 0 -and $fail -eq 0 -and $errs -eq 0 -and $skip -eq 0) { $status = 'PASS' }
-        elseif ($skip -gt 0 -and $fail -eq 0 -and $errs -eq 0) { $note += ' (HELM_E2E_URI not seen by the test JVM?)' }
+        # The relay E2E in the same class is opt-in and skips itself, so judge the LAN test by name.
+        $lan = $suite.SelectSingleNode("testcase[@name='pairAuthListAndRevokeAgainstRealAgent']")
+        $lanRan = $lan -and -not $lan.SelectSingleNode('skipped')
+        if ($ok -and $lanRan -and $fail -eq 0 -and $errs -eq 0) { $status = 'PASS' }
+        elseif (-not $lanRan -and $fail -eq 0 -and $errs -eq 0) { $note += ' (HELM_E2E_URI not seen by the test JVM?)' }
     } finally {
         if ($proc -and -not $proc.HasExited) {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
