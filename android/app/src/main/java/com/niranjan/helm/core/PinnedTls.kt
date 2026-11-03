@@ -93,7 +93,7 @@ interface HelmTransport {
     /** `wss` in production. */
     val scheme: String
 
-    /** True for a relay tunnel (§12): `pair` is never sent over it. */
+    /** True for a relay tunnel (§12): QR `pair` and `auth` only, never code pairing. */
     val relayed: Boolean get() = false
 
     fun client(fingerprintHex: String): OkHttpClient

@@ -75,6 +75,7 @@ android {
 // and show the test's printed results in the console.
 tasks.withType<Test>().configureEach {
     inputs.property("helmE2eUri", providers.environmentVariable("HELM_E2E_URI").orElse(""))
+    inputs.property("helmE2eRelay", providers.environmentVariable("HELM_E2E_RELAY").orElse(""))
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = true

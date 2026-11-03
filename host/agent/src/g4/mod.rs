@@ -228,11 +228,16 @@ where
 
 /// Windows toast with Allow / Deny (through the platform, so tests use the fake).
 async fn show_approval_toast(state: &Arc<AppState>, id: u64, device_name: &str, peer: &str) {
-    let ip = peer.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(peer);
+    let from = if crate::relay::is_relayed_peer(peer) {
+        "coming through the relay, not on this network,".to_string()
+    } else {
+        let ip = peer.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(peer);
+        format!("at {ip}")
+    };
     let toast = Toast {
         title: format!("Allow \u{201c}{device_name}\u{201d} to pair with this PC?"),
         body: format!(
-            "A phone at {ip} wants to control this PC. It is denied automatically in {} s.",
+            "A phone {from} wants to control this PC. It is denied automatically in {} s.",
             state.g4.approvals.timeout.as_secs()
         ),
         actions: vec![

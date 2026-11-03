@@ -242,6 +242,8 @@ input[type='number'] { width: 120px; }
 .form { display: flex; flex-direction: column; gap: 10px; }
 .form label { font-size: 13px; }
 .inline { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.relay-state[data-state='connected'] { color: var(--ok); }
+.relay-state[data-state='error'] { color: var(--red); }
 .check { display: flex; align-items: center; gap: 8px; }
 .check input { width: 16px; height: 16px; accent-color: var(--pencil); }
 .switch-row { display: flex; gap: 14px; align-items: flex-start; cursor: pointer; }

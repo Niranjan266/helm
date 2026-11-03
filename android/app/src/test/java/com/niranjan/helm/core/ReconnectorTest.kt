@@ -1,6 +1,7 @@
 package com.niranjan.helm.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -39,8 +40,12 @@ class ReconnectorTest {
 
     private class FakeTransport : ReconnectTransport {
         val calls = mutableListOf<Call>()
+        val probes = mutableListOf<Call>()
         override fun connect(hostId: String, attemptId: Long, preferred: ReconnectAddress?) {
             calls += Call(hostId, attemptId, preferred)
+        }
+        override fun probeLan(hostId: String, probeId: Long, preferred: ReconnectAddress?) {
+            probes += Call(hostId, probeId, preferred)
         }
         val last: Call get() = calls.last()
     }
@@ -232,5 +237,87 @@ class ReconnectorTest {
         clock.advance(500)
         assertEquals(1, sync.n)
         assertEquals(ReconnectState.Waiting(host, 2, clock.now + 1_000), rr.state)
+    }
+
+    @Test
+    fun onTheLanThereIsNothingToProbe() {
+        val r = Reconnector(clock, transport)
+        r.online(host)
+        assertEquals(ReconnectState.Online(host, viaRelay = false), r.state)
+        assertEquals(0, clock.pending)
+        r.discovered(host, ReconnectAddress("10.0.0.2", 47820))
+        r.networkAvailable()
+        assertTrue(transport.probes.isEmpty())
+    }
+
+    @Test
+    fun attemptThatEndedOnTheRelayStartsLookingForTheLan() {
+        val r = Reconnector(clock, transport)
+        r.online(host)
+        r.dropped(host)
+        clock.advance(500)
+        r.attemptSucceeded(transport.last.id, viaRelay = true)
+        assertEquals(ReconnectState.Online(host, viaRelay = true), r.state)
+        assertEquals(1, clock.pending)
+        clock.advance(ReconnectPolicy.LAN_PROBE_MS)
+        assertEquals(1, transport.probes.size)
+        assertNull(transport.probes.last().via)
+    }
+
+    @Test
+    fun movesBackToLanWhenMdnsFindsThePc() {
+        val r = Reconnector(clock, transport)
+        r.online(host, viaRelay = true)
+        val a = ReconnectAddress("192.168.1.5", 47820)
+        r.discovered(host, a)
+        assertEquals(a, transport.probes.single().via)
+        assertTrue("still on the relay while probing", (r.state as ReconnectState.Online).viaRelay)
+        assertTrue(r.lanProbeSucceeded(transport.probes.single().id))
+        assertEquals(ReconnectState.Online(host, viaRelay = false), r.state)
+        assertEquals("no more probes on the LAN", 0, clock.pending)
+    }
+
+    @Test
+    fun failedProbeStaysOnTheRelayAndTriesAgainLater() {
+        val r = Reconnector(clock, transport)
+        r.online(host, viaRelay = true)
+        r.networkAvailable()
+        val id = transport.probes.single().id
+        r.lanProbeFailed(id)
+        assertEquals(ReconnectState.Online(host, viaRelay = true), r.state)
+        clock.advance(ReconnectPolicy.LAN_PROBE_MS - 1)
+        assertEquals(1, transport.probes.size)
+        clock.advance(1)
+        assertEquals(2, transport.probes.size)
+        r.lanProbeFailed(id) // stale: ignored
+        assertEquals(2, transport.probes.size)
+    }
+
+    @Test
+    fun aDiscoveryDuringAProbeIsNotLost() {
+        val r = Reconnector(clock, transport)
+        r.online(host, viaRelay = true)
+        r.foreground()
+        val a = ReconnectAddress("192.168.1.5", 47820)
+        r.discovered(host, a)
+        assertEquals("one probe at a time", 1, transport.probes.size)
+        r.lanProbeFailed(transport.probes[0].id)
+        assertEquals(a, transport.probes[1].via)
+    }
+
+    @Test
+    fun aLateProbeResultCannotTouchADroppedSession() {
+        val r = Reconnector(clock, transport)
+        r.online(host, viaRelay = true)
+        r.networkAvailable()
+        val id = transport.probes.single().id
+        r.dropped(host)
+        assertFalse("swap refused", r.lanProbeSucceeded(id))
+        assertTrue(r.state is ReconnectState.Waiting)
+        clock.advance(500)
+        r.attemptSucceeded(transport.last.id, viaRelay = true)
+        r.stop()
+        assertEquals(0, clock.pending)
+        assertEquals(ReconnectState.Idle, r.state)
     }
 }

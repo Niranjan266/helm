@@ -5,7 +5,7 @@ import java.net.URLDecoder
 /**
  * A parsed `helm://pair?...` link (PROTOCOL.md §4).
  *
- * `helm://pair?v=1&id=<host_id>&n=<host_name>&a=<ip1>,<ip2>&p=<port>&fp=<64 hex>&t=<token>`
+ * `helm://pair?v=1&id=<host_id>&n=<host_name>&a=<ip1>,<ip2>&p=<port>&fp=<64 hex>&t=<token>[&r=<relay>]`
  */
 data class PairingUri(
     val hostId: String,
@@ -16,11 +16,13 @@ data class PairingUri(
     val fingerprint: String,
     /** One-time pairing token (base64url, no padding). */
     val token: String,
+    /** Normalised relay address (`r=`, §12) when the PC has "Connect from anywhere" on. */
+    val relayUrl: String? = null,
 ) {
     /** Never expose the token in logs. */
     override fun toString(): String =
         "PairingUri(hostId=$hostId, hostName=$hostName, addresses=$addresses, port=$port, " +
-            "fingerprint=$fingerprint, token=***)"
+            "fingerprint=$fingerprint, relayUrl=$relayUrl, token=***)"
 
     companion object {
         const val SCHEME = "helm"
@@ -75,8 +77,11 @@ data class PairingUri(
             val port = portText.toIntOrNull() ?: fail("Pairing link has an invalid port.")
             if (port !in 1..65535) fail("Pairing link port $port is out of range.")
 
+            // An unusable relay address only costs the away-from-home path; the LAN still works.
+            val relayUrl = TunnelProtocol.normalizeRelayUrl(params["r"])
+
             val addresses = params["a"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
-            if (addresses.isEmpty()) fail("Pairing link has no PC addresses.")
+            if (addresses.isEmpty() && relayUrl == null) fail("Pairing link has no PC addresses.")
             for (addr in addresses) {
                 if (!isIpv4(addr)) fail("Pairing link has an invalid address: $addr")
             }
@@ -94,6 +99,7 @@ data class PairingUri(
                 port = port,
                 fingerprint = fp.lowercase(),
                 token = token,
+                relayUrl = relayUrl,
             )
         }
 

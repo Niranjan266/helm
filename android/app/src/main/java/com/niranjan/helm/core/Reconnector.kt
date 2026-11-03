@@ -23,14 +23,21 @@ interface ReconnectClock {
  */
 fun interface ReconnectTransport {
     fun connect(hostId: String, attemptId: Long, preferred: ReconnectAddress?)
+
+    /**
+     * The session runs over the relay: try the LAN **without** touching it, and report back with
+     * [Reconnector.lanProbeSucceeded] (swap only if that returns true) or
+     * [Reconnector.lanProbeFailed], passing the same [probeId], on the reconnector's thread.
+     */
+    fun probeLan(hostId: String, probeId: Long, preferred: ReconnectAddress?) = Unit
 }
 
 sealed interface ReconnectState {
     /** Not watching any PC (never connected, or the user disconnected / forgot it). */
     data object Idle : ReconnectState
 
-    /** The control connection to [hostId] is up; a drop will start retrying. */
-    data class Online(val hostId: String) : ReconnectState
+    /** The control connection to [hostId] is up ([viaRelay]: through the relay, §12). */
+    data class Online(val hostId: String, val viaRelay: Boolean = false) : ReconnectState
 
     /** Lost the PC; the next attempt ([attempt], 1-based) starts at [retryAtMs]. */
     data class Waiting(val hostId: String, val attempt: Int, val retryAtMs: Long) : ReconnectState
@@ -49,6 +56,9 @@ object ReconnectPolicy {
     const val MIN_DELAY_MS = 500L
     const val MAX_DELAY_MS = 30_000L
 
+    /** While on the relay, look for the LAN this often (mDNS may not be running). */
+    const val LAN_PROBE_MS = 60_000L
+
     /** Agent codes that mean "this phone is not trusted any more": stop, never re-pair. */
     private val FATAL = setOf("unknown_device", "bad_signature", LocalCodes.PROTOCOL_VERSION)
 
@@ -65,7 +75,9 @@ object ReconnectPolicy {
  * Keeps one saved PC connected: after a drop it retries with exponential backoff (see
  * [ReconnectPolicy]), retries at once when the network comes back or mDNS reports the PC
  * (that fresh address wins), and stops for good when the user disconnects or forgets the PC
- * or the PC refuses the phone. Not thread-safe: call everything on one thread.
+ * or the PC refuses the phone. The attempt itself falls back from LAN to relay ([HelmConnection]);
+ * while the session is on the relay this keeps probing the LAN and moves back when it answers.
+ * Not thread-safe: call everything on one thread.
  */
 class Reconnector(
     private val clock: ReconnectClock,
@@ -85,23 +97,30 @@ class Reconnector(
     /** Something new happened during an attempt; retry at once if that attempt fails. */
     private var retryAfterAttempt = false
 
+    private var probe = NO_ATTEMPT
+    private var probeTimer: Cancelable? = null
+    private var probeAgainWith: ReconnectAddress? = null
+
     /** The PC currently watched (Online, Waiting, Trying or Stopped), or null. */
     val target: String? get() = hostId
 
     /** A control connection to [hostId] is ready (user connect or a successful attempt). */
-    fun online(hostId: String) {
+    fun online(hostId: String, viaRelay: Boolean = false) {
         cancelTimer()
+        cancelProbe()
         this.hostId = hostId
         failures = 0
         preferred = null
         retryAfterAttempt = false
         currentAttempt = NO_ATTEMPT
-        set(ReconnectState.Online(hostId))
+        set(ReconnectState.Online(hostId, viaRelay))
+        if (viaRelay) scheduleProbe()
     }
 
     /** The live connection to [hostId] dropped: start retrying. */
     fun dropped(hostId: String) {
         if (state !is ReconnectState.Online || !isTarget(hostId)) return
+        cancelProbe()
         failures = 0
         scheduleRetry()
     }
@@ -111,6 +130,25 @@ class Reconnector(
 
     /** The app came back to the foreground. */
     fun foreground() = retryNow()
+
+    /**
+     * The LAN probe connected. True = swap the session onto it (now Online on the LAN); false =
+     * too late (the session moved on meanwhile), close the probe connection.
+     */
+    fun lanProbeSucceeded(probeId: Long): Boolean {
+        if (probeId != probe) return false
+        online(hostId ?: return false, viaRelay = false)
+        return true
+    }
+
+    /** The LAN did not answer: stay on the relay and look again later. */
+    fun lanProbeFailed(probeId: Long) {
+        if (probeId != probe) return
+        probe = NO_ATTEMPT
+        val again = probeAgainWith
+        probeAgainWith = null
+        if (again != null) startProbe(again) else scheduleProbe()
+    }
 
     /** mDNS just reported [hostId] at [address]. */
     fun discovered(hostId: String, address: ReconnectAddress) {
@@ -124,6 +162,7 @@ class Reconnector(
                 preferred = address
                 retryAfterAttempt = true
             }
+            is ReconnectState.Online -> if (s.viaRelay) startProbe(address)
             else -> Unit
         }
     }
@@ -131,6 +170,7 @@ class Reconnector(
     /** The user disconnected (or switched PC): stop watching. Late attempt results are ignored. */
     fun stop() {
         cancelTimer()
+        cancelProbe()
         hostId = null
         preferred = null
         retryAfterAttempt = false
@@ -143,9 +183,9 @@ class Reconnector(
         if (isTarget(hostId)) stop()
     }
 
-    fun attemptSucceeded(attemptId: Long) {
+    fun attemptSucceeded(attemptId: Long, viaRelay: Boolean = false) {
         if (attemptId != currentAttempt) return
-        online(hostId ?: return)
+        online(hostId ?: return, viaRelay)
     }
 
     fun attemptFailed(attemptId: Long, code: String) {
@@ -167,7 +207,7 @@ class Reconnector(
     }
 
     private fun retryNow() {
-        when (state) {
+        when (val s = state) {
             is ReconnectState.Waiting -> {
                 failures = 0
                 attemptNow()
@@ -176,8 +216,44 @@ class Reconnector(
                 failures = 0
                 retryAfterAttempt = true
             }
+            is ReconnectState.Online -> if (s.viaRelay) startProbe(null)
             else -> Unit
         }
+    }
+
+    private fun startProbe(address: ReconnectAddress?) {
+        val host = hostId ?: return
+        if (probe != NO_ATTEMPT) {
+            if (address != null) probeAgainWith = address
+            return
+        }
+        cancelProbeTimer()
+        val id = ++attemptSeq
+        probe = id
+        transport.probeLan(host, id, address)
+    }
+
+    private fun scheduleProbe() {
+        cancelProbeTimer()
+        var handle: Cancelable? = null
+        handle = clock.schedule(ReconnectPolicy.LAN_PROBE_MS) {
+            if (probeTimer === handle) {
+                probeTimer = null
+                startProbe(null)
+            }
+        }
+        probeTimer = handle
+    }
+
+    private fun cancelProbeTimer() {
+        probeTimer?.cancel()
+        probeTimer = null
+    }
+
+    private fun cancelProbe() {
+        cancelProbeTimer()
+        probe = NO_ATTEMPT
+        probeAgainWith = null
     }
 
     private fun scheduleRetry() {

@@ -60,7 +60,7 @@ fun SettingsScreen(
         UpdateSettingsSection()
         if (pcPrefs != null) {
             SectionCard("This PC on this phone") {
-                ToggleRow("Use the relay when not on the same network", pcPrefs.useRelay) { v -> onPcPrefs { it.copy(useRelay = v) } }
+                ToggleRow("Connect from anywhere (relay when not on the same network)", pcPrefs.useRelay) { v -> onPcPrefs { it.copy(useRelay = v) } }
                 ToggleRow("Notify me about this PC's alerts", pcPrefs.notifyAlerts) { v -> onPcPrefs { it.copy(notifyAlerts = v) } }
                 ToggleRow("Confirm admin actions with fingerprint or screen lock", pcPrefs.biometricAdmin) { v -> onPcPrefs { it.copy(biometricAdmin = v) } }
                 ToggleRow("Own touchpad speed for this PC", pcPrefs.touchpadSpeed != null) { v ->

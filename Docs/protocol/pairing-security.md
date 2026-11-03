@@ -71,7 +71,7 @@ nonces and the phone's key.
 - Phone mismatch → phone sends `{"type":"error","code":"bad_code"}` and closes; the PC answers
   `error bad_code`. PC mismatch → `error bad_code`. Every message has the 10 s handshake limit.
 - On success the phone pins `fp` exactly like a QR fingerprint; later connections use
-  normal `auth` (§5.2). Like `pair`, `pair_code` is refused over the relay and on `/stream`.
+  normal `auth` (§5.2). `pair_code` is refused over the relay (QR `pair` is allowed there, §12) and on `/stream`.
 
 Errors: `bad_code` (wrong code, no code shown / expired / used, or a mismatch),
 `pairing_locked`, `bad_signature`, `bad_message`, `timeout`, `denied` (§2).
@@ -88,7 +88,7 @@ fingerprint the phone pins (whoever holds that key can impersonate the PC to the
 | **Offline guessing** from a captured exchange | Not possible: openings are only revealed after the other side committed, and a wrong round stops the exchange; `r` values are 256-bit random and never reused. |
 | **Attacker pairs its own phone** (no MITM, guesses the code) | 1 in 1 000 000 per code, one try per code, lockout as above. With **Approve on PC** (§2) the owner also has to press Allow. |
 | **Shoulder-surfing** the code | Equivalent to scanning the QR: a code is a 5-minute single-use credential; turn on Approve on PC where that matters. |
-| **Relay / internet** attacker | Pairing (QR or code) is refused over the relay (§12). |
+| **Relay / internet** attacker | Code pairing is refused over the relay. QR pairing is allowed there: it needs the one-time 256-bit token, and the phone pins the fingerprint from the QR, so the relay sees only ciphertext (§12). |
 | **Downgrade** (old phone or old agent) | The phone only sends `pair_code` when `hello` has `g4`; an agent without `g4` answers `bad_message`. There is no fallback that skips the proof. |
 
 Not a goal: protecting a PC whose user account is compromised, or a rooted phone.

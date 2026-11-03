@@ -50,8 +50,9 @@ fun StreamControls(
     onResetView: () -> Unit,
     onHide: () -> Unit,
 ) {
-    val preset = StreamPreset.byName(settings.streamPreset)
-    val kbps = if (settings.streamBitrateKbps > 0) settings.streamBitrateKbps else preset.defaultKbps
+    val relayChoice = ui.relayChoice
+    val preset = relayChoice?.preset ?: StreamPreset.byName(settings.streamPreset)
+    val kbps = relayChoice?.kbps ?: if (settings.streamBitrateKbps > 0) settings.streamBitrateKbps else preset.defaultKbps
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -75,7 +76,7 @@ fun StreamControls(
         )
         Picker(
             label = "${"%.1f".format(kbps / 1000f)} Mbps",
-            items = preset.bitrateChoices,
+            items = if (ui.viaRelay) com.niranjan.helm.core.RelayStreamPolicy.BITRATES else preset.bitrateChoices,
             itemLabel = { "${"%.1f".format(it / 1000f)} Mbps" },
             onPick = vm::setBitrate,
         )

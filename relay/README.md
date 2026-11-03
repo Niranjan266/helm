@@ -190,8 +190,10 @@ without breaking the pinned TLS.
   `DATA ch`. On `CLOSE ch` or pipe EOF/error: tear down and (if not already) send `CLOSE ch`.
 - Apply the same per-connection limits as on the LAN, and bound the per-channel input buffer
   (close the channel if the phone outruns the TLS stack by more than ~1 MiB).
-- `pair` messages SHOULD be refused on relayed channels (`bad_message`): pairing requires the
-  QR code, which is a LAN/proximity action. Only `auth` from already-paired devices is accepted.
+- Over relayed channels the agent accepts `auth` and QR-token `pair`, and refuses 6-digit
+  `pair_code` (`bad_message`). The one-time 256-bit token and the fingerprint pinned from the same
+  QR protect QR pairing end to end, so the relay sees only ciphertext; a 6-digit code is too weak
+  for the open internet. The bad-token lockout is shared with the LAN. Reasoning: PROTOCOL.md §12.
 - Mark relayed sessions in `audit.log` (e.g. `via=relay`).
 
 **Android implementation notes.**
@@ -200,7 +202,8 @@ without breaking the pinned TLS.
   pinning setup (`sslSocketFactory` + pinned `TrustManager` + `hostnameVerifier { true }`). OkHttp
   then layers TLS and the Helm WebSocket on top unchanged. Use a custom `Dns` so the dummy host
   name resolves without a lookup.
-- Try the LAN path first (mDNS / saved address); use the relay only when that fails.
+- Try the LAN path first (mDNS / saved address); use the relay only when that fails, and move back
+  to the LAN when it answers again.
 
 ### 5. Close codes (relay → client)
 
@@ -269,8 +272,8 @@ the agent hand credentials to authenticated phones) instead of this public endpo
   inner TLS is pinned to the PC's certificate; the worst case is denial of service for that
   `host_id`.
 - **Phones are not authenticated by the relay.** Anyone who knows a `host_id` can open a channel
-  and attempt a TLS handshake with the agent. The agent's normal device auth (and its own rate
-  limits) protects it; the relay adds the per-IP limit and the per-host phone cap.
+  and attempt a TLS handshake with the agent. The agent's normal device auth, one-time QR token
+  and bad-token lockout protect it; the relay adds the per-IP limit and the per-host phone cap.
 - The relay never holds a private key and cannot decrypt anything.
 
 ## Development
@@ -286,5 +289,10 @@ npx wrangler dev  # local only
 `@cloudflare/vitest-plugin`); the config uses its `cloudflareTest()` plugin, so switching later is
 a package rename.
 
-Not deployed. Deploying needs a Cloudflare account (`npx wrangler deploy`) and, optionally, a
-custom domain route.
+Deploying needs a Cloudflare account (`npx wrangler deploy`) and, optionally, a custom domain
+route. The apps pre-fill the project owner's deployment, `wss://helm-relay.supportdangle-ae0.workers.dev`
+(editable). The relay is off in the apps by default because traffic counts against the owner's
+Cloudflare quota.
+
+`scripts/e2e-relay.ps1` runs a real end-to-end test through a live relay: a throwaway agent, the
+real `wss://` clients on both sides, QR pairing with no LAN address, `auth`, a short stream, revoke.

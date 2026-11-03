@@ -7,6 +7,53 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
+class PairingUriRelayTest {
+    private val id = "3f2b8c1e-9a4d-4e7b-8c2f-1a2b3c4d5e6f"
+    private val fp = "a1".repeat(32)
+    private fun link(a: String, r: String?) =
+        "helm://pair?v=1&id=$id&n=PC&a=$a&p=47820&fp=$fp&t=tok" + (r?.let { "&r=$it" } ?: "")
+
+    @Test
+    fun relayParameterIsOptionalAndNormalised() {
+        assertNull(PairingUri.parse(link("10.0.0.2", null)).relayUrl)
+        val encoded = PairingUri.parse(link("10.0.0.2", "wss%3A%2F%2Frelay.example.com"))
+        assertEquals("wss://relay.example.com", encoded.relayUrl)
+        assertEquals("wss://relay.example.com", PairingUri.parse(link("10.0.0.2", "wss%3A%2F%2Fhttps%3A%2F%2Frelay.example.com")).relayUrl)
+        assertEquals("wss://relay.example.com", PairingUri.parse(link("10.0.0.2", "relay.example.com")).relayUrl)
+    }
+
+    @Test
+    fun aRelayLinkNeedsNoLanAddress() {
+        val u = PairingUri.parse(link("", "wss%3A%2F%2Frelay.example.com"))
+        assertTrue(u.addresses.isEmpty())
+        assertEquals("wss://relay.example.com/connect/$id", EndpointPlanner.relayForPairing(u)!!.connectUrl)
+        assertTrue(EndpointPlanner.forPairing(u).isEmpty())
+    }
+
+    @Test
+    fun badRelayCostsOnlyTheRelay() {
+        assertNull(PairingUri.parse(link("10.0.0.2", "ftp%3A%2F%2Fx")).relayUrl)
+        assertNull(PairingUri.parse(link("10.0.0.2", "ws%3A%2F%2Fplain.example.com")).relayUrl)
+        try {
+            PairingUri.parse(link("", "ftp%3A%2F%2Fx"))
+            fail("no LAN address and no usable relay")
+        } catch (_: PairingUriException) {
+        }
+    }
+
+    @Test
+    fun savedFromRelayPairingKeepsTheRelayAndNoDummyAddress() {
+        val u = PairingUri.parse(link("", "wss%3A%2F%2Frelay.example.com"))
+        val ready = ReadyInfo("d", "admin", id, "PC", Endpoint(TunnelProtocol.innerHost(id), 443), "1", viaRelay = true)
+        val pc = EndpointPlanner.savedFromPairing(u, ready, 5)
+        assertEquals("wss://relay.example.com", pc.relayUrl)
+        assertNull(pc.lastAddress)
+        assertNull(pc.lastPort)
+        assertTrue(EndpointPlanner.forSaved(pc, null).isEmpty())
+        assertEquals("wss://relay.example.com/connect/$id", EndpointPlanner.relayFor(pc)!!.connectUrl)
+    }
+}
+
 class PairingUriTest {
     private val id = "3f2b8c1e-9a4d-4e7b-8c2f-1a2b3c4d5e6f"
     private val fp = "a1".repeat(32)

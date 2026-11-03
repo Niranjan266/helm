@@ -42,11 +42,13 @@ Both sides must follow it exactly. Change it here first, then in code.
 The agent shows a QR code whose text is a URI:
 
 ```
-helm://pair?v=1&id=<host_id>&n=<url-encoded host_name>&a=<ip1>,<ip2>&p=<port>&fp=<64 hex>&t=<token>
+helm://pair?v=1&id=<host_id>&n=<url-encoded host_name>&a=<ip1>,<ip2>&p=<port>&fp=<64 hex>&t=<token>[&r=<url-encoded relay url>]
 ```
 
 - `a` = comma-separated IPv4 addresses of the PC's non-loopback, up interfaces (LAN first).
 - `t` = one-time pairing token: 32 random bytes, **base64url without padding** (43 chars).
+- `r` = optional relay address, present only while "Connect from anywhere" is on (§12). Phones
+  that don't know it ignore it. With `r`, `a` may be empty.
 - Token lifetime: **5 minutes**, single use. Only one token is active at a time.
 - The same URI is printed as text so it can be copied, and the Android app registers the
   `helm://pair` deep link so `adb shell am start -d "<uri>"` or any QR scanner app can open it.
@@ -291,9 +293,33 @@ OBS uses obs-websocket v5 at `ws://127.0.0.1:4455` with password from `obs.json`
 - Relay tunnel: see `relay/README.md` "Tunnel protocol v1". The agent keeps one outgoing
   connection to the relay when `relay.enabled`; the phone, when LAN connect fails, opens
   `wss://<relay>/connect/<host_id>` and runs the normal pinned TLS + `/ws` (or `/stream`) inside it.
-- `pair` is refused over relayed channels (pair on LAN only).
-- `relay.get` / `relay.set` (admin): `{enabled, url}`. Saved PCs store `relay_url` from `system.info`
-  (which adds `relay:{enabled,url}`).
+- `relay.get` / `relay.set` (admin): `{enabled, url}`. Saved PCs store `relay_url` from the QR's `r=`,
+  or from `system.info` (which adds `relay:{enabled,url}`).
+- **Relay address normalisation** (agent and phone, same rules): `wss://host`, `https://host`, a bare
+  `host` and the mistaken `wss://https://host` are all stored as `wss://host`. Plain `ws://` / `http://`
+  is accepted only to loopback (local testing). A bad address saved by an older version heals on load.
+- **Off by default.** Relayed traffic counts against the Cloudflare quota of whoever runs the relay,
+  so the user turns it on ("Connect from anywhere").
+- **Pairing over the relay: QR token only.** While the relay is on, the QR carries `r=`. The phone tries
+  the LAN addresses, then the relay, and may pair through either. A `pair` on a relayed channel is
+  accepted, and `pair_code` stays refused (`bad_message`). Why the two differ:
+  - The QR gives the phone the certificate fingerprint and a one-time 256-bit token over a channel the
+    relay never sees (the PC's screen). The phone pins that fingerprint for TLS inside the tunnel, so
+    the relay sees only ciphertext and cannot read the token or stand in for the PC. A wrong pin fails
+    before the token is sent. Someone who has only the `host_id` must guess 256 bits, so the proximity
+    of the LAN adds nothing to QR pairing's security.
+  - A 6-digit code has 20 bits and no pre-shared fingerprint. Its online-guess limits were designed for
+    the LAN (Docs/protocol/pairing-security.md); it would be exposed to anyone on the internet who knows the
+    `host_id`, so it stays LAN-only. So do mDNS and "nearby PCs".
+  - Guessing is limited by the existing lockout, which is shared by both paths: 5 bad tokens in a row lock
+    `pair` for 60 s. So someone who knows the `host_id` can at worst delay pairing by a minute at a time; the
+    relay's per-IP limit slows that further. "Ask before a new phone pairs" applies to relayed pairing too.
+- **Switching paths.** A saved PC is tried on the LAN first. With a relay to fall back to, dead LAN
+  addresses get 8 s at most in total. While a session runs on the relay, the phone probes the LAN when mDNS
+  reports the PC, when the network changes, and every 60 s, and swaps the session only after the
+  LAN connection is ready (not during a file transfer). A live stream restarts on the new path.
+- **Stream over the relay:** the phone defaults to 720p30 at 2 Mbps and says so; what the user picks
+  while on the relay is honoured, and LAN settings are not touched.
 - Remote wake: `wol.send{mac}` (remote tier) — an awake agent sends the magic packet on its LAN.
 - USB: no protocol change (USB tethering is just another LAN address).
 - `in` kind `gy{dx,dy}` = gyro air-mouse deltas (same handling as `mm`).
