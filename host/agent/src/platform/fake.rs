@@ -349,6 +349,8 @@ pub struct FakePlatform {
     http: Arc<FakeHttp>,
     // G2
     present: crate::present::fake::FakePresenter,
+    // g8
+    probe: Mutex<Option<crate::pointer::PointerProbe>>,
 }
 
 struct FakeToast(Toast, Arc<ToastCallback>);
@@ -393,6 +395,11 @@ impl FakePlatform {
     /// G2: the fake presentation backend (foreground app, PowerPoint, laser log).
     pub fn present_fake(&self) -> Arc<crate::present::fake::FakePresent> {
         self.present.fake()
+    }
+
+    /// g8: what `pointer_probe` reports (`None` = unsupported, the default).
+    pub fn set_pointer_probe(&self, probe: Option<crate::pointer::PointerProbe>) {
+        *self.probe.lock().unwrap() = probe;
     }
 
     /// Low-level input operations "sent" so far.
@@ -612,6 +619,11 @@ impl Platform for FakePlatform {
         st.clipboard_png = Some(png.to_vec());
         st.clipboard_text = None;
         Ok(())
+    }
+
+    fn pointer_probe(&self) -> PResult<crate::pointer::PointerProbe> {
+        (*self.probe.lock().unwrap())
+            .ok_or_else(|| RpcError::unsupported("pointer probe is not available"))
     }
 
     fn new_injector(&self) -> PResult<Injector> {

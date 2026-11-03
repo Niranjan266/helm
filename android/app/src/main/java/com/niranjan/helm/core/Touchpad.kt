@@ -35,14 +35,19 @@ class MotionBatcher {
         dy += y
     }
 
-    /** The pending move, or null if nothing moved enough to matter. */
+    /**
+     * The pending move, or null if nothing moved enough to matter. The wire format has two
+     * decimals, so the move is rounded to hundredths and the remainder stays for the next
+     * frame (sub-pixel carry: slow motion never drifts short).
+     */
     @Synchronized
     fun drain(): InputFrame.Move? {
         if (kotlin.math.abs(dx) < 0.01f && kotlin.math.abs(dy) < 0.01f) return null
-        val m = InputFrame.Move(dx, dy)
-        dx = 0f
-        dy = 0f
-        return m
+        val sx = Math.round(dx * 100f) / 100f
+        val sy = Math.round(dy * 100f) / 100f
+        dx -= sx
+        dy -= sy
+        return InputFrame.Move(sx, sy)
     }
 }
 
