@@ -142,6 +142,7 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
         }
     }
 
+    LaunchedEffect(Unit) { vm.loadFill() }
     LaunchedEffect(fullscreen, fill) { transform = transform.withFill(fullscreen && fill) }
 
     // The video stage: size tracking and the gesture layer for the current mode.
@@ -218,10 +219,13 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 landscapeLock = landscapeLock,
                 keyboardOn = showKeyboard,
                 onKeyboard = { showKeyboard = it },
+                penMode = penMode,
+                penAvailable = remoteUi.phase5,
+                onPen = { penMode = it },
                 onExit = { vm.exitFullscreen() },
                 modifier = Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout),
             )
-            if (showKeyboard) FullscreenKeyboardSlot(remote, Modifier.align(Alignment.BottomCenter))
+            if (showKeyboard) FullscreenKeyboardSlot(remote, onClose = { showKeyboard = false }, Modifier.fillMaxSize())
         }
         return
     }

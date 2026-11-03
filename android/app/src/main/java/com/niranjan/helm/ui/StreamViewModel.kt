@@ -131,7 +131,15 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
     /** The `max_width x max_height` last sent to the PC. */
     private var requestedMax: Pair<Int, Int>? = null
 
-    fun setFill(on: Boolean) = _fill.update { on }
+    fun setFill(on: Boolean) {
+        _fill.update { on }
+        controller.session.value?.hostId?.let { id -> controller.updatePcPrefs(id) { it.copy(streamFill = on) } }
+    }
+
+    /** Restore this PC's saved Fit/Fill choice. */
+    fun loadFill() {
+        _fill.update { controller.prefsFor(controller.session.value?.hostId).streamFill ?: false }
+    }
     fun setLandscapeLock(on: Boolean) = _landscapeLock.update { on }
     fun exitFullscreen() = _fullscreenExited.update { true }
     fun resetFullscreenExit() = _fullscreenExited.update { false }

@@ -38,6 +38,8 @@ data class PcPrefs(
     @SerialName("touchpad_speed") val touchpadSpeed: Float? = null,
     /** Default stream preset for this PC (a [StreamPreset] name). */
     @SerialName("stream_preset") val streamPreset: String? = null,
+    /** Full-screen picture: true = Fill (crop edges), false/null = Fit (letterboxed). */
+    @SerialName("stream_fill") val streamFill: Boolean? = null,
 )
 
 /** An address found on the LAN for a host id (from mDNS). */
