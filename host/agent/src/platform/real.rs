@@ -142,6 +142,16 @@ impl Platform for RealPlatform {
     fn cursor(&self) -> PResult<CursorState> {
         crate::cursor::cursor()
     }
+    fn pointer_probe(&self) -> PResult<crate::pointer::PointerProbe> {
+        #[cfg(windows)]
+        {
+            crate::pointer::win::probe()
+        }
+        #[cfg(not(windows))]
+        {
+            Err(RpcError::unsupported("pointer probe is not available"))
+        }
+    }
     fn cursor_shape(&self, handle: u64) -> PResult<Option<CursorShape>> {
         crate::cursor::cursor_shape(handle)
     }

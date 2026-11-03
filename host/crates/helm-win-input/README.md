@@ -48,7 +48,9 @@ Key names map to virtual-key codes with `name_to_vk("ctrl")`, `vk_to_name(0x11)`
 curve. You can turn it on with `Injector::set_pointer_speed(Some(speed))`.
 `Injector::move_to(x, y)` moves the pointer to an absolute virtual-desktop pixel
 (`SendInput` with `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`, `Op::MoveTo`); the agent uses
-it for the phone's direct-touch `ma` frames. Call it from a per-monitor-v2 DPI aware process
+it for the phone's direct-touch `ma` frames, and (g8, `Docs/protocol/pointer.md`) for `mm` frames in
+`absolute`/`auto` pointer mode: the agent adds the delta to `GetCursorPos`, so pointer speed and
+"Enhance pointer precision" no longer change the distance. Call it from a per-monitor-v2 DPI aware process
 so the pixels are physical.
 
 ## Errors

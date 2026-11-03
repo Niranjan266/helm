@@ -11,6 +11,23 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.niranjan.helm.core.PadPanel
+import com.niranjan.helm.core.PointerPipeline
+import com.niranjan.helm.core.PointerSample
+import com.niranjan.helm.device.PadStore
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -77,7 +94,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niranjan.helm.core.KeyPress
 import com.niranjan.helm.core.MouseButton
 import com.niranjan.helm.core.TextDiff
-import com.niranjan.helm.core.PointerGain
 import com.niranjan.helm.core.ScrollVelocityTracker
 import com.niranjan.helm.core.ThreeFingerSwipe
 import com.niranjan.helm.device.GestureSettings
@@ -105,7 +121,12 @@ private val NavKeys = listOf(
 private val FunctionKeys = (1..12).map { "F$it" to Vk.f(it) }
 
 @Composable
-fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
+fun TouchpadScreen(
+    remote: RemoteViewModel,
+    settings: Settings,
+    hostId: String? = null,
+    onBack: () -> Unit = {},
+) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val focus = remember { FocusRequester() }
@@ -130,6 +151,47 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
     var gestureDialog by remember { mutableStateOf(false) }
     if (gestureDialog) GestureOptionsDialog(gestures, onChange = { g -> gestureStore.update { g } }, onDismiss = { gestureDialog = false })
 
+    // Orientation, not window size: the soft keyboard shrinks the window and must not flip the layout.
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val padStore = remember { PadStore.get(context) }
+    val kbd = rememberFloatingKeyboardState()
+    var kbdOpen by remember { mutableStateOf(padStore.keyboardOpen()) }
+    var panel by remember(hostId) { mutableStateOf(padStore.panel(hostId)) }
+    var collapsed by remember(hostId) { mutableStateOf(padStore.panelCollapsed(hostId)) }
+    var panelDialog by remember { mutableStateOf(false) }
+    var optionsDialog by remember { mutableStateOf(false) }
+    var typeOpen by remember { mutableStateOf(false) }
+    val toggleKeyboard = {
+        kbdOpen = !kbdOpen
+        padStore.setKeyboardOpen(kbdOpen)
+    }
+    if (panelDialog) {
+        PadPanelDialog(
+            current = panel,
+            onPick = {
+                panel = it
+                padStore.setPanel(hostId, it)
+                if (it != PadPanel.NONE) {
+                    collapsed = false
+                    padStore.setPanelCollapsed(hostId, false)
+                }
+            },
+            onDismiss = { panelDialog = false },
+        )
+    }
+
+    // Landscape fills the screen: hide the system bars (swipe from the edge brings them back).
+    val view = LocalView.current
+    DisposableEffect(landscape) {
+        val window = view.context.findActivity()?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (landscape && controller != null) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+
     // Wi-Fi power-save adds delay between packets; keep the radio awake while the pad is open.
     DisposableEffect(Unit) {
         val wifi = WifiLatencyLock(context)
@@ -150,12 +212,15 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
     LaunchedEffect(Unit) {
         remote.textFocus.collect { focused ->
             if (focused) {
+                typeOpen = true
+                delay(80)
                 runCatching { focus.requestFocus() }
                 keyboard?.show()
                 autoShown = true
             } else if (autoShown) {
                 keyboard?.hide()
                 focusManager.clearFocus()
+                typeOpen = false
                 autoShown = false
             }
         }
@@ -178,6 +243,8 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
             precision = gestures.precision,
             onPrecision = { gestureStore.update { it.copy(precision = !it.precision) } },
             onGestures = { gestureDialog = true },
+            keyboardOpen = kbdOpen,
+            onKeyboard = toggleKeyboard,
         )
     }
     val pad = @Composable { modifier: Modifier ->
@@ -198,29 +265,93 @@ fun TouchpadScreen(remote: RemoteViewModel, settings: Settings) {
         TypeField(remote = remote, mods = mods, focus = focus, onKey = ::press)
     }
 
-    // Orientation, not window size: the soft keyboard shrinks the window and must not flip the layout.
-    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    Box(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        if (landscape) {
-            // Landscape: pad on the left, controls in a column on the right.
-            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                pad(Modifier.weight(1f).fillMaxHeight())
-                Column(
-                    Modifier.width(320.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(ControlGap),
-                ) {
+    if (optionsDialog) {
+        AlertDialog(
+            onDismissRequest = { optionsDialog = false },
+            confirmButton = { PencilButton(onClick = { optionsDialog = false }) { Text("DONE") } },
+            title = { DisplayText("Touchpad") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     toolbar()
-                    keys()
+                    MonoChip("Right panel: ${panel.label}", onClick = { panelDialog = true }, dashed = true)
                 }
+            },
+        )
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        if (landscape) {
+            // Landscape: the touch surface fills the screen; controls float over it.
+            val c = Bp.c
+            Box(Modifier.fillMaxSize()) {
+                TouchSurface(
+                    remote = remote,
+                    speed = speed,
+                    haptics = settings.haptics,
+                    gestures = gestures,
+                    onLeftTap = { dragLock = remote.isDragLocked },
+                    immersive = true,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Column(
+                    Modifier.align(Alignment.TopStart).windowInsetsPadding(WindowInsets.displayCutout).padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Row(
+                        Modifier.background(c.paper.copy(alpha = 0.88f)).border(1.dp, c.ink).padding(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        SquareIconButton(onClick = onBack, contentDescription = "Back to Dock", modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
+                        }
+                        MonoChip("Options", onClick = { optionsDialog = true }, height = 36.dp)
+                        MonoChip("Keyboard", onClick = toggleKeyboard, selected = kbdOpen, height = 36.dp)
+                        MonoChip("Type", onClick = { typeOpen = !typeOpen }, selected = typeOpen, height = 36.dp)
+                    }
+                    if (typeOpen) {
+                        Box(Modifier.width(380.dp)) { TypeField(remote = remote, mods = mods, focus = focus, onKey = ::press) }
+                    }
+                }
+                PadSidePanel(
+                    panel = panel,
+                    collapsed = collapsed,
+                    onToggle = {
+                        collapsed = !collapsed
+                        padStore.setPanelCollapsed(hostId, collapsed)
+                    },
+                    onChange = { panelDialog = true },
+                    remote = remote,
+                    mods = mods,
+                    onKey = ::press,
+                    modifier = Modifier.align(Alignment.CenterEnd).windowInsetsPadding(WindowInsets.displayCutout),
+                )
             }
         } else {
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(ControlGap)) {
+            Column(
+                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(ControlGap),
+            ) {
                 toolbar()
                 pad(Modifier.weight(1f).fillMaxWidth())
                 keys()
             }
         }
+        if (kbdOpen) {
+            FloatingKeyboard(
+                state = kbd,
+                onFrames = remote::sendAll,
+                onClose = toggleKeyboard,
+                haptics = settings.haptics,
+            )
+        }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable
@@ -235,6 +366,8 @@ private fun PadToolbar(
     precision: Boolean = false,
     onPrecision: () -> Unit = {},
     onGestures: () -> Unit = {},
+    keyboardOpen: Boolean = false,
+    onKeyboard: () -> Unit = {},
 ) {
     val c = Bp.c
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -246,6 +379,7 @@ private fun PadToolbar(
             MonoChip("Drag lock", onClick = onDragLock, selected = dragLock, height = 36.dp)
             if (airMouse != null) MonoChip("Air mouse", onClick = onAirMouse, selected = airMouse, height = 36.dp)
             MonoChip("Precision", onClick = onPrecision, selected = precision, height = 36.dp)
+            MonoChip("Keyboard", onClick = onKeyboard, selected = keyboardOpen, height = 36.dp)
             MonoChip("Gestures", onClick = onGestures, dashed = true, height = 36.dp)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -262,6 +396,7 @@ private fun PadToolbar(
     }
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun TouchSurface(
     remote: RemoteViewModel,
@@ -270,6 +405,7 @@ private fun TouchSurface(
     gestures: GestureSettings = GestureSettings(),
     onLeftTap: () -> Unit,
     modifier: Modifier = Modifier,
+    immersive: Boolean = false,
 ) {
     val currentGestures by rememberUpdatedState(gestures)
     val momentum = rememberMomentum { dx, dy ->
@@ -286,6 +422,7 @@ private fun TouchSurface(
     val touches: SnapshotStateList<Offset> = remember { mutableStateListOf() }
     var used by remember { mutableStateOf(false) }
     val slop = with(density) { 8.dp.toPx() }
+    val pipeline = remember(density.density) { PointerPipeline(density.density, slopDp = 8f) }
     val notchPx = with(density) { 36.dp.toPx() }
     val pinchPx = with(density) { 60.dp.toPx() }
     val c = Bp.c
@@ -297,7 +434,7 @@ private fun TouchSurface(
     Box(
         modifier
             .dotPaper(c)
-            .border(1.5.dp, c.ink)
+            .then(if (immersive) Modifier.systemGestureExclusion() else Modifier.border(1.5.dp, c.ink))
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val first = awaitFirstDown(requireUnconsumed = false)
@@ -309,20 +446,16 @@ private fun TouchSurface(
                     var swipeFired = false
                     used = true
                     val start = first.uptimeMillis
-                    var last = start
                     var maxPointers = 1
                     var moved = 0f
                     var mode = TwoFinger.NONE
                     var centroidTravel = 0f
                     var spanTravel = 0f
                     var end = start
-                    // Movement inside the tap slop is held back (so a tap does not nudge the
-                    // cursor) and released in one piece once the finger clearly moves.
-                    var heldX = 0f
-                    var heldY = 0f
-                    // Smoothed finger speed (px/ms): raw per-event timing is noisy and made
-                    // the pointer boost jump between frames.
-                    var velocity = 0f
+                    // The pipeline holds back movement inside the tap slop (so a tap does not
+                    // nudge the cursor), filters tremor, and turns every historical sample into
+                    // dp-based, gently accelerated PC pixels.
+                    pipeline.begin(first.position.x, first.position.y, first.uptimeMillis)
                     while (true) {
                         val event = awaitPointerEvent()
                         end = event.changes.maxOf { it.uptimeMillis }
@@ -336,24 +469,13 @@ private fun TouchSurface(
                             val d = c.position - c.previousPosition
                             val dist = d.getDistance()
                             moved += dist
-                            val dt = (c.uptimeMillis - last).coerceAtLeast(1).toFloat()
-                            velocity = if (velocity == 0f) dist / dt else velocity * 0.6f + (dist / dt) * 0.4f
-                            if (moved > slop) {
-                                val rx = d.x + heldX
-                                val ry = d.y + heldY
-                                heldX = 0f
-                                heldY = 0f
-                                val rd = hypot(rx, ry)
-                                // Feed the smoothed speed in as an equivalent time step.
-                                val dtEff = if (velocity > 0f) rd / velocity else dt
-                                val (dx, dy) = PointerGain.apply(rx, ry, dtEff, currentSpeed, currentGestures.precision)
+                            val samples = ArrayList<PointerSample>(c.historical.size + 1)
+                            for (h in c.historical) samples += PointerSample(h.position.x, h.position.y, h.uptimeMillis)
+                            samples += PointerSample(c.position.x, c.position.y, c.uptimeMillis)
+                            pipeline.feed(samples, currentSpeed, currentGestures.precision)?.let { (dx, dy) ->
                                 remote.touchMove(dx, dy)
                                 remote.flushInput()
-                            } else {
-                                heldX += d.x
-                                heldY += d.y
                             }
-                            last = c.uptimeMillis
                         } else if (pressed.size >= 2) {
                             val a = pressed[0]
                             val b = pressed[1]
@@ -419,7 +541,7 @@ private fun TouchSurface(
             },
         contentAlignment = Alignment.Center,
     ) {
-        MonoLabel("Fig. 2 · Touch area", modifier = Modifier.align(Alignment.TopStart).padding(start = 10.dp, top = 8.dp))
+        if (!immersive) MonoLabel("Fig. 2 · Touch area", modifier = Modifier.align(Alignment.TopStart).padding(start = 10.dp, top = 8.dp))
         if (!used) {
             Text(
                 "1 finger · move · tap = click\n2 fingers · scroll · pinch = zoom\n2-finger tap = right click\n3 fingers · swipe = task view / desktop / switch".uppercase(),

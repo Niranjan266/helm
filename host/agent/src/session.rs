@@ -13,6 +13,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use crate::files::{TransferId, Upload};
 use crate::platform::{InputEvent, PenPhase, PenSample, Platform, Rect};
 use crate::stream::ActiveStream;
+use crate::pointer::{AbsoluteMapper, Applied, PointerMode, PointerSettings, choose};
 use crate::proto;
 use crate::router::Tier;
 
@@ -42,6 +43,36 @@ enum InputCmd {
     MoveTo(i32, i32),
 }
 
+/// One `mm` frame. `absolute` (and `auto` when the foreground app does not need raw input)
+/// moves to the real cursor position plus the delta, so pointer speed / "Enhance pointer
+/// precision" cannot distort it; everything else stays relative `SendInput`.
+fn move_pointer(
+    injector: &crate::platform::Injector,
+    platform: &dyn Platform,
+    settings: &PointerSettings,
+    mapper: &mut AbsoluteMapper,
+    dx: f32,
+    dy: f32,
+) -> helm_win_input::Result<()> {
+    let mode = settings.mode();
+    let probe = match mode {
+        PointerMode::Relative => None,
+        _ => platform.pointer_probe().ok(),
+    };
+    match probe {
+        Some(p) if choose(mode, &p) == Applied::Absolute => {
+            match mapper.step((p.x, p.y), p.bounds, dx, dy) {
+                Some((x, y)) => injector.move_to(x, y),
+                None => Ok(()),
+            }
+        }
+        _ => {
+            mapper.reset();
+            injector.inject(&InputEvent::MouseMove { dx, dy })
+        }
+    }
+}
+
 pub struct Session {
     pub id: u64,
     pub device_id: String,
@@ -57,6 +88,8 @@ pub struct Session {
     stream: Mutex<Option<Arc<ActiveStream>>>,
     /// Phase 5: the pen thread (created on the first `pn` frame).
     pen: Mutex<Option<std_mpsc::Sender<PenSample>>>,
+    /// g8: `pointer_mode` (shared with the agent; in-memory `auto` until set).
+    pointer: Mutex<Arc<PointerSettings>>,
 }
 
 /// No `pn` frame for this long = the pen left the screen (the phone sends no "leave").
@@ -122,7 +155,13 @@ impl Session {
             after: Mutex::new(HashMap::new()),
             stream: Mutex::new(None),
             pen: Mutex::new(None),
+            pointer: Mutex::new(Arc::new(PointerSettings::in_memory(PointerMode::Auto))),
         }
+    }
+
+    /// Use the agent's saved `pointer_mode` for this session's `mm` frames.
+    pub fn use_pointer_settings(&self, settings: Arc<PointerSettings>) {
+        *lock(&self.pointer) = settings;
     }
 
     /// A session whose messages go nowhere (unit tests).
@@ -251,7 +290,9 @@ impl Session {
         let mut input = lock(&self.input);
         if input.is_none() {
             match platform.new_injector() {
-                Ok(injector) => *input = Some(self.spawn_input_thread(injector)),
+                Ok(injector) => {
+                    *input = Some(self.spawn_input_thread(injector, platform.clone()))
+                }
                 Err(e) => {
                     tracing::warn!("input unavailable: {}", e.message);
                     return Self::report_input_error(&self.tx, &self.input_error, "internal");
@@ -270,18 +311,27 @@ impl Session {
     fn spawn_input_thread(
         &self,
         injector: crate::platform::Injector,
+        platform: Arc<dyn Platform>,
     ) -> std_mpsc::Sender<InputCmd> {
         let (sender, receiver) = std_mpsc::channel::<InputCmd>();
         let tx = self.tx.clone();
         let last_error = self.input_error.clone();
         let session_id = self.id;
+        let settings = lock(&self.pointer).clone();
         let spawned = std::thread::Builder::new()
             .name(format!("helm-input-{session_id}"))
             .spawn(move || {
+                let mut mapper = AbsoluteMapper::new();
                 while let Ok(cmd) = receiver.recv() {
                     let result = match cmd {
+                        InputCmd::Event(InputEvent::MouseMove { dx, dy }) => {
+                            move_pointer(&injector, &*platform, &settings, &mut mapper, dx, dy)
+                        }
                         InputCmd::Event(event) => injector.inject(&event),
-                        InputCmd::MoveTo(x, y) => injector.move_to(x, y),
+                        InputCmd::MoveTo(x, y) => {
+                            mapper.reset();
+                            injector.move_to(x, y)
+                        }
                     };
                     match result {
                         Ok(()) => *lock(&last_error) = None,
