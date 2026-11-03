@@ -87,6 +87,7 @@ fun HomeScreen(
                 OutlineButton(onClick = { showSettings = true }, textStyle = BpType.monoStrong) { Text("SETTINGS") }
             }
             SheetStrip("Sheet 01 · Your PCs", right = "Auto-reconnect on")
+            UpdateBanner()
 
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -229,6 +230,7 @@ fun HomeScreen(
                         Text("Haptic feedback", modifier = Modifier.weight(1f))
                         Switch(checked = settings.haptics, onCheckedChange = { v -> onSettings { it.copy(haptics = v) } })
                     }
+                    UpdateSettingsRows()
                     MonoLabel("More settings appear once a PC is connected.")
                 }
             },

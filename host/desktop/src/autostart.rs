@@ -47,6 +47,11 @@ pub fn is_enabled() -> bool {
     }
 }
 
+/// Whether the Run value exists and starts `exe` (a portable copy being replaced by an update).
+pub fn starts(exe: &Path) -> bool {
+    read_value().is_some_and(|v| points_to(&v, exe))
+}
+
 /// Add (or point at this exe) / remove the Run value.
 pub fn set_enabled(on: bool) -> anyhow::Result<()> {
     if on {
