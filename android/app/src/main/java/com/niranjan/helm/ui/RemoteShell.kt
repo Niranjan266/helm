@@ -174,6 +174,8 @@ fun RemoteShell(
     val scope = rememberCoroutineScope()
     val config = LocalConfiguration.current
     val landscape = config.screenWidthDp > config.screenHeightDp
+    // Landscape touchpad: the touch surface owns the whole screen (no rail); it has its own back button.
+    val immersive = landscape && screen == Screen.TOUCHPAD
     var confirmForget by remember { mutableStateOf(false) }
 
     // Latency for the status line: a light system.ping every 15 s while connected.
@@ -247,7 +249,7 @@ fun RemoteShell(
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding)) {
-                if (landscape) ShellRail(Screen.entries.filter { it.primary }, screen, go, openDrawer)
+                if (landscape && !immersive) ShellRail(Screen.entries.filter { it.primary }, screen, go, openDrawer)
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     Column(Modifier.fillMaxSize()) {
                         if (reconnect.isReconnecting) {
@@ -307,7 +309,7 @@ private fun ScreenContent(
         Screen.SECURITY -> SecurityScreen(main, power)
         Screen.DOCK -> DockScreen(remote, settings, landscape, onOpenApps = { go(Screen.APPS) })
         Screen.APPS -> AppsScreen(remote)
-        Screen.TOUCHPAD -> TouchpadScreen(remote, settings)
+        Screen.TOUCHPAD -> TouchpadScreen(remote, settings, hostId = session.hostId, onBack = { go(Screen.DOCK) })
         Screen.GAMEPAD -> GamepadScreen(remote, settings)
         Screen.SCREEN -> StreamScreen(remote, settings)
         Screen.MEDIA -> MediaScreen(remote, landscape)

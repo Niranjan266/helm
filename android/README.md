@@ -44,6 +44,15 @@ every 60 s). New code: `core/EverydayModels.kt`, `core/HelmApiG6.kt`, `device/Ev
 `device/PhoneRinger.kt`, `device/RingActivity.kt`, `ui/EverydayViewModel.kt` and the screens.
 Every g6 call is gated on the hello feature.
 
+Landscape touchpad and accurate pointer (g8, [`Docs/protocol/pointer.md`](../Docs/protocol/pointer.md)):
+in landscape the touch surface fills the screen (system bars and the rail are hidden; a small
+back / Options / Keyboard / Type strip floats over it). A collapsible right panel (click buttons,
+modifier and special keys, media, volume, deck buttons or nothing) is chosen per PC (`device/PadStore.kt`).
+`ui/FloatingKeyboard.kt` is a reusable draggable, resizable PC keyboard overlay (full QWERTY, sticky
+Ctrl/Alt/Shift/Win with double-tap lock, opacity, remembered position) that any screen can host.
+Pointer maths (`core/PointerMotion.kt`): dp-based deltas, every historical sample, tremor filter,
+gentle gain curve, sub-pixel carry; layout/placement maths in `core/PadLayout.kt` (`G8PointerTest`, `G8PadTest`).
+
 In-app updates: Settings shows the version and "Check for updates"; a banner on the PC list and
 the Dock shows when a newer release exists (background check at most daily, when the app comes to
 the foreground). Install downloads `Helm-android.apk` from GitHub Releases with progress, checks

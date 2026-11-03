@@ -29,6 +29,8 @@ pub mod everyday;
 pub mod g3;
 // G2: presentation mode
 pub mod present;
+// g8: pointer accuracy (Docs/protocol/pointer.md)
+pub mod pointer;
 // G5: dock folders, smart order, deck pages, icons
 pub mod g5;
 
@@ -55,6 +57,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(g3::G3Module),
         Arc::new(present::PresentModule),
         Arc::new(g5::G5Module),
+        Arc::new(pointer::PointerModule),
     ]
 }
 
