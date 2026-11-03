@@ -164,6 +164,8 @@ pub struct AppState {
     pub g6: crate::g6::G6State,
     /// G5: app usage stats and custom deck icons.
     pub g5: crate::g5::G5State,
+    /// g8: `pointer_mode` (Docs/protocol/pointer.md).
+    pub pointer: Arc<crate::pointer::PointerSettings>,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -231,6 +233,7 @@ impl AppState {
             refresh_addresses: false,
             g6: crate::g6::G6State::new(&config.data_dir),
             g5: crate::g5::G5State::new(&config.data_dir),
+            pointer: Arc::new(crate::pointer::PointerSettings::load(&config.data_dir)),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -1006,6 +1009,7 @@ async fn run_session<S>(
         tier,
         tx.clone(),
     ));
+    session.use_pointer_settings(state.pointer.clone());
     state
         .sessions
         .lock()

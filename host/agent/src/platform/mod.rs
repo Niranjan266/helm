@@ -315,6 +315,14 @@ pub trait Platform: Send + Sync + Debug + 'static {
     fn system_uptime_s(&self) -> PResult<u64> {
         Err(RpcError::unsupported("uptime is not available"))
     }
+    // ---- g8 (pointer accuracy, Docs/protocol/pointer.md) ----
+
+    /// Cursor position, virtual desktop and the foreground app's input needs. Read-only.
+    /// Unsupported = the agent keeps using relative motion.
+    fn pointer_probe(&self) -> PResult<crate::pointer::PointerProbe> {
+        Err(RpcError::unsupported("pointer probe is not available"))
+    }
+
     // ---- G2 (presentation mode) ----
 
     /// Presentation detection, PowerPoint automation and the laser overlay (one per PC).
