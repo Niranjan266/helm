@@ -134,7 +134,7 @@ fun Modifier.streamGestures(
                         Multi.PINCH -> if (prevSpan > 1f) {
                             setTransform(transform().zoomBy(span / prevSpan, centroid.x, centroid.y).panBy(dc.x, dc.y))
                         }
-                        Multi.SCROLL -> if (direct && transform().zoom > 1.01f) {
+                        Multi.SCROLL -> if (direct && transform().canPan) {
                             setTransform(transform().panBy(dc.x, dc.y))
                         } else {
                             // Natural scrolling: fingers down = content down = wheel up (dy > 0).

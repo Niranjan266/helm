@@ -125,7 +125,7 @@ fun G3Controls(vm: StreamViewModel, g3: G3Ui, windows: List<WindowEntry>, monito
 }
 
 @Composable
-private fun WindowPickerDialog(windows: List<WindowEntry>, g3: G3Ui, onPick: (WindowEntry?) -> Unit, onDismiss: () -> Unit) {
+internal fun WindowPickerDialog(windows: List<WindowEntry>, g3: G3Ui, onPick: (WindowEntry?) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Stream one window") },
@@ -287,7 +287,7 @@ fun Modifier.dragSelectGestures(
     }
 
     fun panOrScroll(dx: Float, dy: Float) {
-        if (transform().zoom > 1.01f) setTransform(transform().panBy(dx, dy)) else remote.touchScroll(-dx / notchPx, dy / notchPx)
+        if (transform().canPan) setTransform(transform().panBy(dx, dy)) else remote.touchScroll(-dx / notchPx, dy / notchPx)
     }
 
     fun run(actions: List<DragAction>) {

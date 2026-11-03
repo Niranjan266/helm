@@ -49,6 +49,8 @@ fun StreamControls(
     onKeyboard: (Boolean) -> Unit,
     onResetView: () -> Unit,
     onHide: () -> Unit,
+    landscapeLock: Boolean = false,
+    onLandscapeLock: ((Boolean) -> Unit)? = null,
 ) {
     val preset = StreamPreset.byName(settings.streamPreset)
     val kbps = if (settings.streamBitrateKbps > 0) settings.streamBitrateKbps else preset.defaultKbps
@@ -60,6 +62,9 @@ fun StreamControls(
         BpFilterChip(selected = !settings.streamDirectTouch, onClick = { vm.setDirectTouch(false) }, label = { Text("Trackpad") })
         BpFilterChip(selected = settings.streamDirectTouch, onClick = { vm.setDirectTouch(true) }, label = { Text("Touch") })
         BpFilterChip(selected = keyboardOn, onClick = { onKeyboard(!keyboardOn) }, label = { Text("Keyboard") })
+        if (onLandscapeLock != null) {
+            BpFilterChip(selected = landscapeLock, onClick = { onLandscapeLock(!landscapeLock) }, label = { Text("Landscape") })
+        }
 
         Picker(
             label = ui.monitor?.name ?: "Primary screen",
@@ -88,7 +93,7 @@ fun StreamControls(
 }
 
 @Composable
-private fun <T> Picker(label: String, items: List<T>, itemLabel: (T) -> String, onPick: (T) -> Unit) {
+internal fun <T> Picker(label: String, items: List<T>, itemLabel: (T) -> String, onPick: (T) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         OutlineButton(onClick = { open = true }) { Text(label) }
