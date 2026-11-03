@@ -145,16 +145,83 @@ class RelayTunnelTest {
     }
 
     @Test
-    fun pairingIsNeverAllowedOverTheRelay() {
-        for (build in listOf(
-            { HelmConnection(agent.hostId, pin, listOf(Endpoint("127.0.0.1", 1)), identity, HandshakeMode.Pair("t"), relay = relayTransport()) },
-            { HelmConnection(agent.hostId, pin, listOf(Endpoint("127.0.0.1", 1)), identity, HandshakeMode.Pair("t"), transport = relayTransport()) },
-        )) {
-            try {
-                build()
-                fail("pairing over the relay must be refused")
-            } catch (_: IllegalArgumentException) {
-            }
+    fun qrPairingWorksOverTheRelayWithNoLanAddress() = runBlocking {
+        val phone = DeviceIdentity(UUID.randomUUID().toString(), "Away Phone", SoftwareDeviceSigner())
+        val c = HelmConnection(
+            agent.hostId, pin, emptyList(), phone, HandshakeMode.Pair(agent.validToken),
+            relay = relayTransport(),
+        )
+        val ready = c.connect()
+        assertTrue(ready.viaRelay)
+        assertTrue(agent.devices.containsKey(phone.deviceId))
+        c.close()
+        // The token never crossed in the clear, and the phone can come back with auth.
+        val seen = String(relay.seenBytes(), Charsets.ISO_8859_1)
+        for (plain in listOf(agent.validToken, "\"pair\"", "Away Phone")) assertFalse("relay saw '$plain'", plain in seen)
+        val again = HelmConnection(agent.hostId, pin, emptyList(), phone, HandshakeMode.Auth, relay = relayTransport())
+        assertTrue(again.connect().viaRelay)
+        again.close()
+    }
+
+    @Test
+    fun qrPairingStillPrefersTheLan() = runBlocking {
+        val phone = DeviceIdentity(UUID.randomUUID().toString(), "Home Phone", SoftwareDeviceSigner())
+        val c = HelmConnection(
+            agent.hostId, pin, listOf(Endpoint("127.0.0.1", agentServer.port)), phone, HandshakeMode.Pair(agent.validToken),
+            relay = relayTransport(),
+        )
+        assertFalse(c.connect().viaRelay)
+        c.close()
+        assertEquals(0, relay.channels.get())
+    }
+
+    @Test
+    fun aWrongPinOverTheRelayNeverSendsTheToken() = runBlocking {
+        val phone = DeviceIdentity(UUID.randomUUID().toString(), "Phone", SoftwareDeviceSigner())
+        val c = HelmConnection(
+            agent.hostId, "00".repeat(32), emptyList(), phone, HandshakeMode.Pair(agent.validToken),
+            relay = relayTransport(),
+        )
+        try {
+            c.connect()
+            fail("expected pin mismatch")
+        } catch (e: HelmException) {
+            assertEquals(LocalCodes.PIN_MISMATCH, e.code)
+        }
+        assertFalse(agent.tokenUsed)
+    }
+
+    @Test
+    fun codePairingIsNeverAllowedOverTheRelay() {
+        val observing = CodePairingTransport()
+        try {
+            HelmConnection(agent.hostId, pin, listOf(Endpoint("127.0.0.1", 1)), identity, HandshakeMode.PairCode("123456"), transport = observing, relay = relayTransport())
+            fail("code pairing over the relay must be refused")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
+    @Test
+    fun deadLanAddressesDoNotHoldUpTheRelay() = runBlocking {
+        val t0 = System.currentTimeMillis()
+        // 10.255.255.1 drops packets: without the LAN budget this alone would take the full limit.
+        val c = HelmConnection(
+            agent.hostId, pin, listOf(Endpoint("10.255.255.1", 47820), Endpoint("10.255.255.2", 47820)), identity, HandshakeMode.Auth,
+            relay = relayTransport(), lanBudgetMs = 1_500,
+        )
+        assertTrue(c.connect().viaRelay)
+        c.close()
+        assertTrue("took ${System.currentTimeMillis() - t0} ms", System.currentTimeMillis() - t0 < 9_000)
+    }
+
+    @Test
+    fun noRouteAtAllIsAPlainFailureNotACrash() = runBlocking {
+        val c = HelmConnection(agent.hostId, pin, emptyList(), identity, HandshakeMode.Auth)
+        try {
+            c.connect()
+            fail("expected unreachable")
+        } catch (e: HelmException) {
+            assertEquals(LocalCodes.UNREACHABLE, e.code)
         }
     }
 

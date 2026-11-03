@@ -155,5 +155,136 @@ class E2eRealAgentTest {
         log("E2E OK")
     }
 
+    /**
+     * The real thing: phone code -> live `wss://` relay -> real agent, using only the QR link and
+     * no LAN address. Run with HELM_E2E_RELAY=1 and HELM_E2E_URI = a link carrying `r=`
+     * (scripts/e2e-relay.ps1 starts a throwaway agent and does this).
+     */
+    @Test
+    fun pairPingStreamAndRevokeThroughTheRealRelay() = runBlocking<Unit> {
+        assumeTrue("HELM_E2E_RELAY not set; skipping real-relay E2E test", System.getenv("HELM_E2E_RELAY") == "1")
+        val raw = System.getenv("HELM_E2E_URI")
+        assumeTrue("HELM_E2E_URI not set", !raw.isNullOrBlank())
+        val uri = PairingUri.parse(raw!!)
+        log("relay: ${uri.relayUrl}; LAN addresses in the link are ignored")
+        val relayUrl = requireNotNull(uri.relayUrl) { "the QR link must carry r=" }
+        assertTrue("must be the real TLS path", relayUrl.startsWith("wss://"))
+        val identity = DeviceIdentity(UUID.randomUUID().toString(), "Helm relay E2E", SoftwareDeviceSigner())
+        fun relay() = RelayTransport.forPc(relayUrl, uri.hostId)!!
+        fun connection(mode: HandshakeMode, path: String = Endpoint.CONTROL_PATH, sink: ((ByteArray) -> Unit)? = null) =
+            HelmConnection(uri.hostId, uri.fingerprint, emptyList(), identity, mode, path = path, binarySink = sink, relay = relay())
+
+        // 1. Pair over the relay. The agent may still be signing in to the relay: wait for it.
+        val t0 = System.nanoTime()
+        var pairConn: HelmConnection
+        var ready: ReadyInfo
+        val waitUntil = System.currentTimeMillis() + 45_000
+        while (true) {
+            pairConn = connection(HandshakeMode.Pair(uri.token))
+            try {
+                ready = pairConn.connect()
+                break
+            } catch (e: HelmException) {
+                log("pair attempt: ${e.code}: ${e.message}")
+                if (e.code != LocalCodes.UNREACHABLE || System.currentTimeMillis() > waitUntil) {
+                    throw AssertionError("pair over the relay failed: ${e.code}: ${e.message}", e)
+                }
+                Thread.sleep(2_000)
+            }
+        }
+        log("paired over the relay in ${ms(t0)} ms: tier=${ready.tier} host=${ready.hostName} agent=${ready.agentVersion}")
+        assertTrue(ready.viaRelay)
+        assertEquals(uri.hostId.lowercase(), ready.hostId.lowercase())
+        assertEquals("admin", ready.tier)
+
+        // 2. system.ping (measured) and system.info.
+        val pings = pingStats(pairConn, 20)
+        log("system.ping x20: min ${pings.first} / median ${pings.second} / max ${pings.third} ms")
+        val info = pairConn.request("system.info")
+        assertEquals(uri.hostId.lowercase(), (info["host_id"] as? JsonPrimitive)?.contentOrNull?.lowercase())
+        val relayInfo = RelayConfig.from(info["relay"] as? JsonObject)
+        log("system.info: relay=$relayInfo")
+        assertEquals(true, relayInfo?.enabled)
+        assertEquals(relayUrl, TunnelProtocol.normalizeRelayUrl(relayInfo?.url))
+        pairConn.close()
+
+        // 3. Reconnect with auth, still only over the relay.
+        val t1 = System.nanoTime()
+        val authConn = connection(HandshakeMode.Auth)
+        val ready2 = try {
+            authConn.connect()
+        } catch (e: HelmException) {
+            throw AssertionError("auth over the relay failed: ${e.code}: ${e.message}", e)
+        }
+        log("auth over the relay in ${ms(t1)} ms: tier=${ready2.tier}")
+        assertTrue(ready2.viaRelay)
+        val pings2 = pingStats(authConn, 20)
+        log("system.ping x20 after auth: min ${pings2.first} / median ${pings2.second} / max ${pings2.third} ms")
+
+        // 3b. Optional soak (HELM_E2E_IDLE_S): both sockets idle past the relay's idle limits.
+        System.getenv("HELM_E2E_IDLE_S")?.toLongOrNull()?.let { idle ->
+            log("idling $idle s")
+            Thread.sleep(idle * 1000)
+            val soak = pingStats(authConn, 5)
+            log("system.ping x5 after idling $idle s: min ${soak.first} / median ${soak.second} / max ${soak.third} ms")
+        }
+
+        // 4. A short 720p30 stream: first keyframe, then what actually gets through.
+        assertTrue("the agent must advertise p2", authConn.supportsPhase2)
+        val session = StreamSession(
+            control = authConn,
+            openStreamSocket = { sink -> connection(HandshakeMode.Auth, Endpoint.STREAM_PATH, sink) },
+            sink = { },
+        )
+        val choice = RelayStreamPolicy.choose(viaRelay = true, perPc = null, global = "P1080_30", globalKbps = 0)
+        assertEquals(StreamPreset.P720_30, choice.preset)
+        val t2 = System.nanoTime()
+        val started = try {
+            session.start(StreamRequest(choice.preset, bitrateKbps = choice.kbps, audio = false))
+        } catch (e: HelmException) {
+            throw AssertionError("stream.start over the relay failed: ${e.code}: ${e.message}", e)
+        }
+        log("stream.start in ${ms(t2)} ms: ${started.width}x${started.height}@${started.fps} ${started.codec} (${started.encoder}) ${choice.kbps} kbps")
+        val deadline = System.currentTimeMillis() + 15_000
+        while (session.keyframesReceived == 0L && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        log("first keyframe after ${ms(t2)} ms")
+        assertTrue("no keyframe within 15 s over the relay", session.keyframesReceived > 0)
+        val framesBefore = session.framesReceived
+        val tRun = System.nanoTime()
+        Thread.sleep(8_000)
+        val frames = session.framesReceived - framesBefore
+        val secs = (System.nanoTime() - tRun) / 1e9
+        log("stream over the relay: $frames frames in ${"%.1f".format(secs)} s = ${"%.1f".format(frames / secs)} fps, ${session.keyframesReceived} keyframes")
+        val during = pingStats(authConn, 5)
+        log("system.ping x5 while streaming: min ${during.first} / median ${during.second} / max ${during.third} ms")
+        session.stop()
+
+        // 5. Revoke ourselves, disconnect, and the relay path must refuse us from now on.
+        val revoked = authConn.request("devices.revoke", buildJsonObject { put("device_id", identity.deviceId) })
+        assertEquals(true, (revoked["revoked"] as? JsonPrimitive)?.booleanOrNull)
+        authConn.close()
+        val after = connection(HandshakeMode.Auth)
+        try {
+            after.connect()
+            after.close()
+            throw AssertionError("auth after revoke unexpectedly succeeded")
+        } catch (e: HelmException) {
+            log("auth after revoke: ${e.code}")
+            assertEquals("unknown_device", e.code)
+        }
+        log("REAL RELAY E2E OK")
+    }
+
+    private fun ms(since: Long) = (System.nanoTime() - since) / 1_000_000
+
+    private suspend fun pingStats(c: HelmConnection, n: Int): Triple<Long, Long, Long> {
+        val all = List(n) {
+            val t = System.nanoTime()
+            c.request("system.ping")
+            ms(t)
+        }.sorted()
+        return Triple(all.first(), all[n / 2], all.last())
+    }
+
     private fun log(s: String) = println("[helm-e2e] $s")
 }

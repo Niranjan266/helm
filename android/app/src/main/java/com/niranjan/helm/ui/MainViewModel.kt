@@ -159,6 +159,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** "Connect from anywhere" for one PC. Returns an error message, or null. */
+    fun setAnywhere(hostId: String, on: Boolean, typedUrl: String? = null): String? = controller.setAnywhere(hostId, on, typedUrl)
+
     fun prefsFor(hostId: String): com.niranjan.helm.core.PcPrefs = controller.prefsFor(hostId)
 
     fun updatePcPrefs(hostId: String, change: (com.niranjan.helm.core.PcPrefs) -> com.niranjan.helm.core.PcPrefs) =

@@ -5,7 +5,7 @@ running the Helm agent **in-process** through the `helm-agent` library (`../agen
 window only hides it, so phones stay connected; **Quit Helm** in the tray stops the agent cleanly.
 
 - Pages: Home (status, details, phones, pairing QR with countdown, log), Phones (access level,
-  revoke), Pair, Activity (`audit.log`), Settings (Start with Windows, port, pause, relay,
+  revoke), Pair, Activity (`audit.log`), Settings (Start with Windows, port, pause, Connect from anywhere,
   update check — updates are only downloaded and verified, never run).
 - Tray: Open Helm, Show pairing QR, Pause/Resume connections, Quit Helm.
 - One copy per user (`tauri-plugin-single-instance`); starting it again focuses the window.

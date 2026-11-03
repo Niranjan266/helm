@@ -180,6 +180,13 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 ?: remoteUi.monitors.firstOrNull { it.isPrimary }?.width)
             if (penMode && remoteUi.phase5) PenOverlay({ transform }, remote::send, Modifier.fillMaxSize())
             if (settings.streamShowStats) StatsOverlay(ui, Modifier.align(Alignment.TopStart).padding(8.dp))
+            if (ui.relayChoice?.loweredForRelay == true && ui.streaming) {
+                MonoLabel(
+                    com.niranjan.helm.core.RelayStreamPolicy.NOTICE,
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp),
+                )
+            }
             if (!ui.streaming) StatusOverlay(ui, onRetry = { vm.setActive(false); vm.setActive(true) }, Modifier.align(Alignment.Center))
             if (!showControls && extrasUi.recording != null) RecordingDot(extrasUi, Modifier.align(Alignment.TopStart).padding(8.dp))
             if (!showControls) {

@@ -261,6 +261,7 @@ impl AppState {
             self.port,
             &self.identity.fingerprint,
             &token,
+            self.relay.pairing_url().as_deref(),
         );
         Pairing {
             uri,
@@ -891,7 +892,8 @@ where
     };
     let outcome = match proto::parse_handshake(&text) {
         Err(why) => Err((codes::BAD_MESSAGE, why)),
-        // Short-code pairing (g4): same LAN-only and control-socket-only rules as `pair`.
+        // Short-code pairing (g4) stays LAN-only: a 6-digit code is too weak to expose to anyone
+        // on the internet who knows the host id (PROTOCOL §12).
         Ok(Handshake::PairCode(msg)) if crate::relay::is_relayed_peer(&peer) => {
             state
                 .audit
@@ -908,16 +910,9 @@ where
         Ok(Handshake::PairCode(msg)) => {
             crate::g4::run_code_pairing(state, &mut ws, &peer, &nonce, msg).await
         }
-        // Pairing needs the QR code, a LAN/proximity action (PROTOCOL §12).
-        Ok(Handshake::Pair { device_id, .. }) if crate::relay::is_relayed_peer(&peer) => {
-            state
-                .audit
-                .record("pair_fail", Some(&device_id), Some(&peer), "relayed");
-            Err((
-                codes::BAD_MESSAGE,
-                "pairing is only allowed on the local network".to_string(),
-            ))
-        }
+        // QR pairing is allowed on relayed channels too: the one-time 256-bit token plus the
+        // fingerprint pinned from the same QR protect it, and the same bad-token lockout applies
+        // to everyone (PROTOCOL §12).
         Ok(Handshake::Pair { .. }) if !allow_pair => Err((
             codes::BAD_MESSAGE,
             "pairing is only allowed on the control socket".to_string(),

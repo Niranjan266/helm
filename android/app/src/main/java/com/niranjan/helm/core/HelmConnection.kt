@@ -163,15 +163,19 @@ class HelmConnection(
      */
     private val binarySink: ((ByteArray) -> Unit)? = null,
     /**
-     * Phase 4 fallback (§12): tried after every LAN endpoint failed to reach the agent. Only for
-     * [HandshakeMode.Auth]; pairing never goes over the relay.
+     * Phase 4 fallback (§12): tried after every LAN endpoint failed to reach the agent. Allowed
+     * for [HandshakeMode.Auth] and QR [HandshakeMode.Pair] (the token and the pinned fingerprint
+     * protect it); never for 6-digit code pairing.
      */
     private val relay: HelmTransport? = null,
+    /** With a relay to fall back to, don't let dead LAN addresses hold the user up for long. */
+    private val lanBudgetMs: Long = 8_000,
+    /** The relay adds a hop or two; a phone on mobile data needs more than the LAN limit. */
+    private val relayHelloTimeoutMs: Long = 20_000,
 ) {
     init {
-        require(endpoints.isNotEmpty() || relay != null) { "at least one endpoint is required" }
         require(mode is HandshakeMode.Auth || path == Endpoint.CONTROL_PATH) { "pairing is only allowed on the control socket" }
-        require(mode is HandshakeMode.Auth || (relay == null && !transport.relayed)) { "pairing is never allowed over the relay" }
+        require(mode !is HandshakeMode.PairCode || (relay == null && !transport.relayed)) { "code pairing is never allowed over the relay" }
         require(relay == null || relay.relayed) { "relay transport must be relayed" }
         require(mode !is HandshakeMode.PairCode || transport is FingerprintObserver) { "code pairing needs a FingerprintObserver transport" }
     }
@@ -208,6 +212,10 @@ class HelmConnection(
 
     /** Incoming file data per transfer id (lowercase hex); closed on `file.done`. */
     private val downloads = ConcurrentHashMap<String, Channel<BinaryFrame>>()
+    private val uploading = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** A file is on its way: swapping this connection for another now would break it. */
+    val transferActive: Boolean get() = downloads.isNotEmpty() || uploading.get() > 0
 
     @Volatile
     private var socket: WebSocket? = null
@@ -239,9 +247,12 @@ class HelmConnection(
         check(started.compareAndSet(false, true)) { "connect() may only be called once" }
         val clients = HashMap<HelmTransport, okhttp3.OkHttpClient>()
         var lastError: HelmException? = null
+        val lanDeadline = System.currentTimeMillis() + lanBudgetMs
         for (route in routes) {
             val endpoint = route.endpoint
             if (closedByUser.get()) throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+            val hasFallback = relay != null && !route.transport.relayed
+            if (hasFallback && System.currentTimeMillis() >= lanDeadline) continue
             val client = clients[route.transport] ?: try {
                 route.transport.client(fingerprint).also { clients[route.transport] = it }
             } catch (e: Exception) {
@@ -253,7 +264,12 @@ class HelmConnection(
             (route.transport as? FingerprintObserver)?.resetObserved()
             val ws = client.newWebSocket(request, ChannelListener(events))
             socket = ws
-            when (val attempt = handshake(ws, events, endpoint, route.transport as? FingerprintObserver)) {
+            val helloLimit = when {
+                route.transport.relayed -> maxOf(helloTimeoutMs, relayHelloTimeoutMs)
+                hasFallback -> minOf(helloTimeoutMs, (lanDeadline - System.currentTimeMillis()).coerceAtLeast(1_000))
+                else -> helloTimeoutMs
+            }
+            when (val attempt = handshake(ws, events, endpoint, route.transport as? FingerprintObserver, helloLimit)) {
                 is Attempt.Success -> {
                     readyInfo = attempt.info.copy(viaRelay = route.transport.relayed)
                     hostFeatures = attempt.info.features
@@ -291,10 +307,11 @@ class HelmConnection(
         events: Channel<WsEvent>,
         endpoint: Endpoint,
         observer: FingerprintObserver? = null,
+        helloLimitMs: Long = helloTimeoutMs,
     ): Attempt {
         // 1. Wait for `hello` (agent speaks first). Anything that fails before a first message
         //    means "no Helm agent reachable here" -> try the next endpoint.
-        val first = withTimeoutOrNull(helloTimeoutMs) { nextMessage(events) }
+        val first = withTimeoutOrNull(helloLimitMs) { nextMessage(events) }
             ?: return Attempt.TryNext(
                 HelmException(LocalCodes.UNREACHABLE, "No answer from the PC at $endpoint."),
             )
@@ -698,6 +715,8 @@ class HelmConnection(
         val idBytes = BinaryFrame.idFromHex(tid)
             ?: throw HelmException(LocalCodes.TRANSFER_FAILED, "PC returned a bad transfer id.")
         var offset = 0L
+        uploading.incrementAndGet()
+        try {
         withContext(Dispatchers.IO) {
             open().use { input ->
                 val buf = ByteArray(BinaryFrame.MAX_DATA)
@@ -716,6 +735,9 @@ class HelmConnection(
                     if (n < buf.size) break
                 }
             }
+        }
+        } finally {
+            uploading.decrementAndGet()
         }
         if (offset != size) {
             throw HelmException(LocalCodes.TRANSFER_FAILED, "File changed while sending ($offset of $size bytes).")

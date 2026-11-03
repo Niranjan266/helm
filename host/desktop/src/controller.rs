@@ -72,6 +72,8 @@ pub struct RelayView {
     pub url: String,
     pub connected: bool,
     pub last_error: Option<String>,
+    /// What the window shows: state, one-word label and a plain sentence.
+    pub line: status::RelayLine,
 }
 
 #[derive(Serialize)]
@@ -350,26 +352,25 @@ impl Controller {
     }
 
     fn relay_view(&self) -> RelayView {
-        match self.agent() {
-            Some(st) => {
-                let s = st.relay.settings();
-                let live = st.relay.status();
-                RelayView {
-                    enabled: s.enabled,
-                    url: s.url,
-                    connected: live.connected,
-                    last_error: live.last_error,
-                }
-            }
-            None => {
-                let s = Relay::load(&self.data_dir).settings();
-                RelayView {
-                    enabled: s.enabled,
-                    url: s.url,
-                    connected: false,
-                    last_error: None,
-                }
-            }
+        let (settings, live) = match self.agent() {
+            Some(st) => (st.relay.settings(), st.relay.status()),
+            None => (
+                Relay::load(&self.data_dir).settings(),
+                relay::RelayStatus::default(),
+            ),
+        };
+        let line = status::relay_line(
+            self.run_state(),
+            settings.enabled,
+            live.connected,
+            live.last_error.as_deref(),
+        );
+        RelayView {
+            enabled: settings.enabled,
+            url: status::relay_url_shown(&settings.url),
+            connected: live.connected,
+            last_error: live.last_error,
+            line,
         }
     }
 
@@ -648,6 +649,10 @@ impl Controller {
             "-",
             &format!("enabled={} url={}", saved.enabled, saved.url),
         );
+        // A QR already on screen must name the relay (or stop naming it).
+        if matches!(self.current_pairing(), Ok(Some(_))) {
+            let _ = self.new_pairing();
+        }
         self.notify("status");
         Ok(())
     }
@@ -689,6 +694,9 @@ async fn pump(
             },
             line = audit.recv() => match line {
                 Ok(line) => {
+                    if matches!(line.split('\t').nth(1), Some("relay_up" | "relay_down")) {
+                        ctl.notify("status");
+                    }
                     if line.split('\t').nth(1) == Some("pair_ok") {
                         // The code was used up; a new phone appeared.
                         ctl.lock().pairing = None;

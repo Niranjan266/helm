@@ -20,24 +20,47 @@ object TunnelProtocol {
 
     fun isHostId(s: String): Boolean = UUID_RE.matches(s)
 
+    /** The relay address offered to users (the project owner's own deployment; editable). */
+    const val DEFAULT_RELAY_URL = "wss://helm-relay.supportdangle-ae0.workers.dev"
+
+    private const val MAX_URL = 512
+    private val HOST_RE = Regex("^([A-Za-z0-9._-]+|\\[[0-9A-Fa-f:.]+])(:(\\d{1,5}))?$")
+
     /**
-     * `wss://<relay>/connect/<host_id>` from the agent's `relay.url`. Accepts `wss://`, `ws://`,
-     * `https://`, `http://` or a bare host; trailing slashes are dropped. Null when unusable.
+     * Normalises whatever a person typed as the relay address, like the agent does (relay.rs):
+     * `wss://host`, `https://host`, a bare `host` and the mistaken `wss://https://host` all become
+     * `wss://host`. Plain `ws://` / `http://` only to loopback. Null when unusable.
      */
-    fun connectUrl(relayUrl: String?, hostId: String): String? {
-        if (relayUrl.isNullOrBlank() || !isHostId(hostId)) return null
-        var u = relayUrl.trim().trimEnd('/')
-        val lower = u.lowercase()
-        u = when {
-            lower.startsWith("wss://") || lower.startsWith("ws://") -> u
-            lower.startsWith("https://") -> "wss://" + u.substring(8)
-            lower.startsWith("http://") -> "ws://" + u.substring(7)
-            "://" in u -> return null
-            else -> "wss://$u"
+    fun normalizeRelayUrl(input: String?): String? {
+        var rest = input?.trim()?.trimEnd('/').orEmpty()
+        if (rest.isEmpty() || rest.length > MAX_URL) return null
+        if (rest.any { it.isWhitespace() || it.isISOControl() || it == '?' || it == '#' || it == '@' }) return null
+        // Peel every leading scheme; the outermost one says whether plain text was asked for.
+        var plain: Boolean? = null
+        while (true) {
+            val i = rest.indexOf("://")
+            if (i < 0) break
+            when (rest.substring(0, i).lowercase()) {
+                "wss", "https" -> plain = plain ?: false
+                "ws", "http" -> plain = plain ?: true
+                else -> return null
+            }
+            rest = rest.substring(i + 3).trimStart('/')
         }
-        val hostPart = u.substringAfter("://").substringBefore('/')
-        if (hostPart.isEmpty() || ' ' in u) return null
-        return u + CONNECT_PATH + hostId.lowercase()
+        val m = HOST_RE.matchEntire(rest.substringBefore('/')) ?: return null
+        val host = m.groupValues[1].lowercase()
+        if (host in setOf("wss", "ws", "https", "http")) return null
+        m.groupValues[3].takeIf { it.isNotEmpty() }?.let { if (it.toInt() !in 1..65535) return null }
+        val loopback = host == "localhost" || host == "[::1]" || host.startsWith("127.")
+        if (plain == true && !loopback) return null
+        return (if (plain == true) "ws://" else "wss://") + rest
+    }
+
+    /** `wss://<relay>/connect/<host_id>` from a relay address (see [normalizeRelayUrl]). */
+    fun connectUrl(relayUrl: String?, hostId: String): String? {
+        if (!isHostId(hostId)) return null
+        val base = normalizeRelayUrl(relayUrl) ?: return null
+        return base + CONNECT_PATH + hostId.lowercase()
     }
 
     /** Splits [len] bytes of [b] from [off] into tunnel chunks of at most [MAX_CHUNK]. */

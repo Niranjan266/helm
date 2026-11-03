@@ -144,11 +144,11 @@
     $('#d-port').textContent = s.port ?? (s.run === 'running' ? '—' : `${s.configured_port} (off)`);
     $('#d-uptime').textContent = fmtUptime(s.uptime_s);
     $('#d-phones').textContent = s.phones_summary;
-    $('#d-relay').textContent = !s.relay.enabled ? 'Off' : s.relay.connected ? 'Connected' : 'Connecting';
+    $('#d-relay').textContent = s.relay.line.label;
+    $('#d-relay').title = s.relay.line.text;
+    renderRelay(s.relay);
     $('#s-run').textContent = s.headline.label;
     $('#s-pause').textContent = s.run === 'running' || s.run === 'starting' ? 'Pause connections' : 'Resume connections';
-    $('#s-relay-state').textContent = !s.relay.enabled ? 'Off' : s.relay.connected ? 'Connected' : (s.relay.last_error ? 'Error' : 'Connecting');
-    $('#s-relay-state').title = s.relay.last_error || '';
     $('#a-version').textContent = s.version;
     $('#a-host').textContent = s.host_name;
     $('#a-hostid').textContent = s.host_id || '—';
@@ -156,6 +156,31 @@
     $('#a-data').textContent = s.data_dir;
     document.title = `Helm · ${s.headline.label}`;
   }
+
+  // "Connect from anywhere": the same switch on Home and Settings.
+  function renderRelay(relay) {
+    document.querySelectorAll('[data-relay-on]').forEach((box) => { box.checked = relay.enabled; });
+    document.querySelectorAll('[data-relay-label]').forEach((n) => {
+      n.textContent = relay.line.label;
+      n.dataset.state = relay.line.state;
+    });
+    document.querySelectorAll('[data-relay-text]').forEach((n) => { n.textContent = relay.line.text; });
+  }
+
+  document.querySelectorAll('[data-relay-on]').forEach((box) => {
+    box.addEventListener('change', async () => {
+      const want = box.checked;
+      const url = $('#s-relay-url').value.trim() || (state.status ? state.status.relay.url : '');
+      try {
+        await call('set_relay', { enabled: want, url });
+        toast(want ? 'Connecting to the relay…' : 'This PC is on the local network only now.');
+      } catch {
+        box.checked = !want;
+      }
+      loadStatus();
+      loadSettings();
+    });
+  });
 
   // ------------------------------------------------------------------ phones
   function tierSelect(p) {
@@ -347,7 +372,7 @@
       el('div', { class: 'approval-body' },
         el('div', { class: 'approval-text' },
           el('strong', { text: a.device_name || 'A phone' }),
-          el('span', { class: 'muted', text: `Pairing ${how} from ${(a.peer || '').replace(/:\d+$/, '') || 'the network'}. Only allow a phone you hold.` })),
+          el('span', { class: 'muted', text: `Pairing ${how} from ${(a.peer || '').startsWith('via=relay') ? 'outside this network, through the relay' : (a.peer || '').replace(/:\d+$/, '') || 'the network'}. Only allow a phone you hold.` })),
         el('div', { class: 'actions-row' }, allow, deny)));
   }
 
@@ -410,7 +435,6 @@
     $('#s-autostart').closest('label').title = s.autostart_key;
     if (document.activeElement !== $('#s-port')) $('#s-port').value = s.port;
     if (document.activeElement !== $('#s-relay-url')) $('#s-relay-url').value = s.relay_url;
-    $('#s-relay-on').checked = s.relay_enabled;
     $('#s-approval').checked = s.require_approval;
   }
 
@@ -474,7 +498,9 @@
     },
     'save-relay': async () => {
       await call('set_relay', { enabled: $('#s-relay-on').checked, url: $('#s-relay-url').value.trim() });
-      toast('Relay settings saved.');
+      toast('Relay address saved.');
+      $('#s-relay-url').blur();
+      loadStatus();
       loadSettings();
     },
     'check-updates': async (btn) => {
@@ -536,7 +562,7 @@
         run: 'running', version: '0.1.0', host_name: 'DESKTOP-PREVIEW', host_first: 'DESKTOP-', host_rest: 'PREVIEW',
         host_id: 'preview', fingerprint: 'AB:CD:EF', port: 47820, configured_port: 47820, addresses: ['192.168.0.173'],
         uptime_s: 754, phones_online: 1, phones_total: 2, phones_summary: '1 of 2 online',
-        relay: { enabled: false, url: '', connected: false, last_error: null }, error: null, data_dir: 'C:\\Users\\you\\AppData\\Roaming\\Helm',
+        relay: { enabled: false, url: 'wss://relay.example.com', connected: false, last_error: null, line: { state: 'off', label: 'Off', text: 'Off. Phones reach this PC on the same network only.' } }, error: null, data_dir: 'C:\\Users\\you\\AppData\\Roaming\\Helm',
         headline: { tone: 'ok', label: 'Running', badge: 'Connected', message: 'Pixel 8 is connected. Go steer!' },
       },
       get_phones: [
@@ -550,7 +576,7 @@
         { time: new Date(now - 6e4).toISOString(), event: 'auth_ok', device_id: 'a', device_name: 'Pixel 8', peer: '192.168.0.42:5555', detail: '', text: 'Pixel 8 connected' },
         { time: new Date(now - 3e6).toISOString(), event: 'pair_fail', device_id: null, device_name: null, peer: '192.168.0.50:4000', detail: 'bad_token', text: 'Pairing refused (bad token)' },
       ],
-      get_settings: { require_approval: false, autostart: false, autostart_key: 'HKCU\\…\\Run', port: 47820, relay_enabled: false, relay_url: '', data_dir: '', version: '0.1.0' },
+      get_settings: { require_approval: false, autostart: false, autostart_key: 'HKCU\\…\\Run', port: 47820, relay_enabled: false, relay_url: 'wss://relay.example.com', data_dir: '', version: '0.1.0' },
     };
     if (cmd in sample) return sample[cmd];
     throw new Error('Preview only: not connected to Helm.');

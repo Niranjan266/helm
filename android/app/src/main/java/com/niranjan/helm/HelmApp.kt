@@ -129,7 +129,13 @@ class HelmController(context: Context) {
                 return Cancelable { main.removeCallbacks(r) }
             }
         },
-        transport = ReconnectTransport { hostId, id, preferred -> reconnectAttempt(hostId, id, preferred) },
+        transport = object : ReconnectTransport {
+            override fun connect(hostId: String, attemptId: Long, preferred: ReconnectAddress?) =
+                reconnectAttempt(hostId, attemptId, preferred)
+
+            override fun probeLan(hostId: String, probeId: Long, preferred: ReconnectAddress?) =
+                lanProbe(hostId, probeId, preferred)
+        },
         onState = { st ->
             _reconnect.value = st
             updateDiscovery()
@@ -160,13 +166,14 @@ class HelmController(context: Context) {
             endpoints = EndpointPlanner.forPairing(uri, discovery.find(uri.hostId)),
             identity = identity(),
             mode = HandshakeMode.Pair(uri.token),
+            relay = EndpointPlanner.relayForPairing(uri),
         )
         _session.value = Session(uri.hostId, uri.hostName, conn, isPairing = true, fingerprint = uri.fingerprint)
         scope.launch {
             try {
                 val ready = withContext(Dispatchers.IO) { conn.connect() }
                 savedPcs.upsert(EndpointPlanner.savedFromPairing(uri, ready, System.currentTimeMillis()))
-                if (_session.value?.connection === conn) reconnector.online(uri.hostId)
+                if (_session.value?.connection === conn) reconnector.online(uri.hostId, ready.viaRelay)
                 updateName(conn, ready.hostName)
                 rememberMacs(conn, uri.hostId)
             } catch (_: HelmException) {
@@ -215,7 +222,7 @@ class HelmController(context: Context) {
                 if (_session.value?.connection !== conn) return@launch
                 rememberConnected(pc, ready)
                 _session.value?.let { if (it.connection === conn && it.quiet) _session.value = it.copy(quiet = false) }
-                reconnector.online(pc.hostId)
+                reconnector.online(pc.hostId, ready.viaRelay)
                 updateName(conn, ready.hostName)
                 rememberMacs(conn, pc.hostId)
             } catch (_: HelmException) {
@@ -272,7 +279,7 @@ class HelmController(context: Context) {
             val current = savedPcs.get(hostId) ?: return
             var next = current
             if (macs.isNotEmpty() && macs != current.macs) next = next.copy(macs = macs)
-            if (relay != null) next = next.copy(relayUrl = relay.url?.takeIf { relay.enabled })
+            if (relay != null) next = next.copy(relayUrl = com.niranjan.helm.core.PcReach.reportedRelay(relay.enabled, relay.url))
             if (next != current) savedPcs.upsert(next)
         } catch (_: HelmException) {
         }
@@ -320,6 +327,15 @@ class HelmController(context: Context) {
     fun updatePcPrefs(hostId: String, change: (PcPrefs) -> PcPrefs) {
         val pc = savedPcs.get(hostId) ?: return
         savedPcs.upsert(pc.copy(prefs = change(pc.prefs)))
+    }
+
+    /** The per-PC "Connect from anywhere" switch. Returns an error for the user, or null. */
+    fun setAnywhere(hostId: String, on: Boolean, typedUrl: String? = null): String? {
+        val pc = savedPcs.get(hostId) ?: return "This PC is not saved any more."
+        val next = com.niranjan.helm.core.PcReach.withAnywhere(pc, on, typedUrl)
+            ?: return "That does not look like a relay address. Try wss://your-relay.example.com"
+        savedPcs.upsert(next)
+        return null
     }
 
     fun prefsFor(hostId: String?): PcPrefs = hostId?.let { savedPcs.get(it)?.prefs } ?: PcPrefs()
@@ -483,12 +499,54 @@ class HelmController(context: Context) {
                     return@launch
                 }
                 rememberConnected(pc, ready)
-                reconnector.attemptSucceeded(attemptId)
+                reconnector.attemptSucceeded(attemptId, ready.viaRelay)
                 updateName(conn, ready.hostName)
                 rememberMacs(conn, pc.hostId)
             } catch (e: HelmException) {
                 if (_session.value?.connection === conn) reconnector.attemptFailed(attemptId, e.code)
             }
+        }
+    }
+
+    /**
+     * The session runs over the relay: try the LAN on the side and swap only once it answers
+     * (nothing to lose when it doesn't). A live stream follows on its own, since it restarts when
+     * the control socket changes; a file transfer is left to finish first.
+     */
+    private fun lanProbe(hostId: String, probeId: Long, preferred: ReconnectAddress?) {
+        val s = _session.value
+        val pc = savedPcs.get(hostId)
+        val found = preferred?.let { a -> pc?.let { DiscoveredHost(it.hostId, it.name, a.host, a.port, "") } } ?: discovery.find(hostId)
+        val endpoints = pc?.let { EndpointPlanner.forSaved(it, found) }.orEmpty()
+        if (s == null || pc == null || endpoints.isEmpty() || s.connection.transferActive) {
+            reconnector.lanProbeFailed(probeId)
+            return
+        }
+        val conn = HelmConnection(
+            hostId = pc.hostId,
+            fingerprint = pc.fingerprint,
+            endpoints = endpoints,
+            identity = identity(),
+            mode = HandshakeMode.Auth,
+            helloTimeoutMs = 4_000,
+        )
+        scope.launch {
+            val ready = try {
+                withContext(Dispatchers.IO) { conn.connect() }
+            } catch (_: HelmException) {
+                reconnector.lanProbeFailed(probeId)
+                return@launch
+            }
+            val current = _session.value
+            if (current == null || current.connection !== s.connection || !reconnector.lanProbeSucceeded(probeId)) {
+                conn.close()
+                return@launch
+            }
+            rememberConnected(pc, ready)
+            _session.value = current.copy(connection = conn, isPairing = false, fingerprint = pc.fingerprint, quiet = false)
+            current.connection.close()
+            updateName(conn, ready.hostName)
+            rememberMacs(conn, pc.hostId)
         }
     }
 
