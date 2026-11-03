@@ -101,6 +101,48 @@ pub fn headline(run: RunState, online: &[String], paired: usize, error: Option<&
     }
 }
 
+/// "Connect from anywhere" as the window shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RelayLine {
+    /// CSS hook and short label source: `off`, `paused`, `connecting`, `connected`, `error`.
+    pub state: &'static str,
+    /// One word for tight places (Home's details table, the Settings card head).
+    pub label: &'static str,
+    /// One plain sentence: what is happening and, on error, why.
+    pub text: String,
+}
+
+/// Never a bare "ERROR": an error always carries the agent's reason.
+pub fn relay_line(run: RunState, enabled: bool, connected: bool, error: Option<&str>) -> RelayLine {
+    let line = |state, label, text: String| RelayLine { state, label, text };
+    if !enabled {
+        return line("off", "Off", "Off. Phones reach this PC on the same network only.".into());
+    }
+    if run != RunState::Running {
+        return line("paused", "Paused", "On, and waits until Helm is running.".into());
+    }
+    if connected {
+        return line(
+            "connected",
+            "Connected",
+            "Connected. Paired phones can reach this PC from anywhere.".into(),
+        );
+    }
+    match error {
+        Some(why) => line("error", "Not connected", format!("Not connected: {why}. Retrying…")),
+        None => line("connecting", "Connecting", "Connecting to the relay…".into()),
+    }
+}
+
+/// The relay address to show: the saved one, else the pre-filled default.
+pub fn relay_url_shown(saved: &str) -> String {
+    if saved.is_empty() {
+        helm_agent::relay::DEFAULT_RELAY_URL.to_string()
+    } else {
+        saved.to_string()
+    }
+}
+
 /// "1 of 2 online".
 pub fn phones_summary(online: usize, paired: usize) -> String {
     if paired == 0 {
@@ -204,6 +246,29 @@ mod tests {
         assert!(pause_stops(RunState::Running));
         assert!(!pause_stops(RunState::Paused));
         assert!(!pause_stops(RunState::Conflict));
+    }
+
+    #[test]
+    fn relay_line_says_what_is_going_on() {
+        let off = relay_line(RunState::Running, false, false, None);
+        assert_eq!((off.state, off.label), ("off", "Off"));
+        let on = relay_line(RunState::Running, true, true, None);
+        assert_eq!((on.state, on.label), ("connected", "Connected"));
+        let wait = relay_line(RunState::Running, true, false, None);
+        assert_eq!((wait.state, wait.label), ("connecting", "Connecting"));
+        let bad = relay_line(RunState::Running, true, false, Some("the relay knows a different key for this PC"));
+        assert_eq!(bad.state, "error");
+        assert!(bad.text.contains("different key"), "{}", bad.text);
+        assert_ne!(bad.label, "ERROR");
+        assert_eq!(relay_line(RunState::Paused, true, false, None).state, "paused");
+    }
+
+    #[test]
+    fn relay_address_is_prefilled_until_one_is_saved() {
+        let shown = relay_url_shown("");
+        assert!(shown.starts_with("wss://"), "{shown}");
+        assert_eq!(helm_agent::relay::normalize_url(&shown).unwrap(), shown);
+        assert_eq!(relay_url_shown("wss://mine.example"), "wss://mine.example");
     }
 
     #[test]

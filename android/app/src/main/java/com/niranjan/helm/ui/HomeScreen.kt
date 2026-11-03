@@ -38,6 +38,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.niranjan.helm.core.DiscoveredHost
+import com.niranjan.helm.core.PcLink
+import com.niranjan.helm.core.PcReach
+import com.niranjan.helm.core.TunnelProtocol
 import com.niranjan.helm.core.SavedPc
 import com.niranjan.helm.device.Settings
 import com.niranjan.helm.device.ThemeMode
@@ -58,12 +61,19 @@ fun HomeScreen(
     onPaste: (String) -> String?,
     /** g4: pair with a nearby PC by the 6-digit code it shows. Returns an error or null. */
     onPairCode: (DiscoveredHost, String) -> String? = { _, _ -> "Code pairing is not available." },
+    /** "Connect from anywhere" for one PC, with a typed address when asked. Returns an error or null. */
+    onAnywhere: (SavedPc, Boolean, String?) -> String? = { _, _, _ -> null },
 ) {
     val c = Bp.c
     var nearbyInfo by remember { mutableStateOf<DiscoveredHost?>(null) }
     var showPaste by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var removeTarget by remember { mutableStateOf<SavedPc?>(null) }
+    var relayTarget by remember { mutableStateOf<SavedPc?>(null) }
+    val anywhereSwitch: (SavedPc, Boolean) -> Unit = { pc, on ->
+        // Turning on with no saved address asks for one (pre-filled); nothing is saved until then.
+        if (on && pc.relayUrl.isNullOrBlank()) relayTarget = pc else onAnywhere(pc, on, null)
+    }
 
     val savedIds = saved.map { it.hostId.lowercase() }.toSet()
     val nearby = discovered.values.filter { it.hostId !in savedIds }.sortedBy { it.name.lowercase() }
@@ -113,23 +123,22 @@ fun HomeScreen(
                         onLongPress = { removeTarget = pc },
                         onWake = { onWake(pc) },
                     )
+                    AnywhereRow(pc, onSwitch = { on -> anywhereSwitch(pc, on) }, onEdit = { relayTarget = pc })
                 }
                 saved.drop(1).forEach { pc ->
                     val found = discovered[pc.hostId.lowercase()]
                     val connecting = connectingTo.equals(pc.hostId, ignoreCase = true)
+                    val reach = PcReach.of(pc, found, connecting)
                     PcRow(
                         title = pc.name,
-                        status = when {
-                            connecting -> "Connecting…"
-                            found != null -> "Online · ${found.address}"
-                            else -> "Searching the network…"
-                        },
-                        statusColor = if (found != null && !connecting) c.ok else c.ink2,
+                        status = reach.text,
+                        statusColor = if (reach.link == PcLink.WIFI || reach.link == PcLink.RELAY) c.ok else c.ink2,
                         action = if (found == null && pc.macs.isNotEmpty()) "Wake" else "Connect",
                         onAction = { if (found == null && pc.macs.isNotEmpty()) onWake(pc) else onConnect(pc, Screen.DOCK) },
                         onClick = { onConnect(pc, Screen.DOCK) },
                         onLongClick = { removeTarget = pc },
                     )
+                    AnywhereRow(pc, onSwitch = { on -> anywhereSwitch(pc, on) }, onEdit = { relayTarget = pc })
                 }
                 if (nearby.isNotEmpty()) {
                     MonoLabel("Nearby · not paired", color = c.ink)
@@ -203,6 +212,37 @@ fun HomeScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { nearbyInfo = null }) { Text("Close") } },
+        )
+    }
+
+    relayTarget?.let { pc ->
+        var address by remember(pc.hostId) { mutableStateOf(pc.relayUrl ?: TunnelProtocol.DEFAULT_RELAY_URL) }
+        var addressError by remember(pc.hostId) { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { relayTarget = null },
+            title = { Text("Connect from anywhere") },
+            text = {
+                Column {
+                    Text("Away from Wi-Fi, ${pc.name} is reached through this relay. Connect from anywhere must be on for the PC too. The relay only forwards encrypted traffic.")
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it; addressError = null },
+                        label = { Text("Relay address") },
+                        singleLine = true,
+                        isError = addressError != null,
+                        supportingText = addressError?.let { { Text(it) } },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val err = onAnywhere(pc, true, address)
+                    if (err == null) relayTarget = null else addressError = err
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { relayTarget = null }) { Text("Cancel") } },
         )
     }
 
@@ -291,10 +331,11 @@ private fun MainPcPanel(
     onWake: () -> Unit,
 ) {
     val c = Bp.c
-    val (status, color) = when {
-        connecting -> "● Connecting…" to c.pencilInk
-        found != null -> "● Online · ${found.address}" to c.ok
-        else -> "○ Searching the network…" to c.ink2
+    val reach = PcReach.of(pc, found, connecting)
+    val (status, color) = when (reach.link) {
+        PcLink.CONNECTING -> "● ${reach.text}" to c.pencilInk
+        PcLink.WIFI, PcLink.RELAY -> "● ${reach.text}" to c.ok
+        PcLink.SEARCHING -> "○ ${reach.text}" to c.ink2
     }
     FigBox(fig = "1", trailing = status, trailingColor = color, modifier = Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -323,6 +364,21 @@ private fun MainPcPanel(
                 }
             }
         }
+    }
+}
+
+/** The per-PC "Connect from anywhere" switch, with the relay address one tap away. */
+@Composable
+private fun AnywhereRow(pc: SavedPc, onSwitch: (Boolean) -> Unit, onEdit: () -> Unit) {
+    val c = Bp.c
+    val on = PcReach.anywhereOn(pc)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("Connect from anywhere", style = MaterialTheme.typography.bodyMedium, color = c.ink)
+            MonoLabel(if (on) "Relay when Wi-Fi can't reach it" else "Wi-Fi only", color = c.ink2, maxLines = 1)
+        }
+        if (on) TextButton(onClick = onEdit) { MonoLabel("Address", color = c.pencilInk, strong = true) }
+        Switch(checked = on, onCheckedChange = onSwitch)
     }
 }
 

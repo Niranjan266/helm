@@ -5,8 +5,8 @@ running the Helm agent **in-process** through the `helm-agent` library (`../agen
 window only hides it, so phones stay connected; **Quit Helm** in the tray stops the agent cleanly.
 
 - Pages: Home (status, details, phones, pairing QR with countdown, log), Phones (access level,
-  revoke), Pair, Activity (`audit.log`), Settings (Start with Windows, port, pause, relay,
-  updates).
+  revoke), Pair, Activity (`audit.log`), Settings (Start with Windows, port, pause, relay /
+  Connect from anywhere, updates).
 - Updates (`src/updater.rs`): checks GitHub Releases at startup and daily; "Update available vX →
   Install" in Settings and the tray. Install downloads `Helm-windows-x64-setup.exe` through
   `helm-update` (HTTPS, size, SHA-256, Ed25519; a bad file is refused and deleted), runs it

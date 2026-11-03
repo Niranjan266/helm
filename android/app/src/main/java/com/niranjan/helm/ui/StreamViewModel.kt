@@ -73,6 +73,10 @@ data class StreamUi(
     val codecName: String? = null,
     val monitor: MonitorInfo? = null,
     val reconnects: Int = 0,
+    /** This stream runs over the relay (§12). */
+    val viaRelay: Boolean = false,
+    /** What the relay policy picked; the controls show this while on the relay. */
+    val relayChoice: com.niranjan.helm.core.StreamChoice? = null,
 )
 
 /** G3 stream options (Docs/protocol/streaming-2.md). Not persisted: each visit starts plain. */
@@ -237,14 +241,31 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The user's quality picks while on the relay; they don't touch the LAN settings. */
+    private var relayPick: StreamPreset? = null
+    private var relayKbps = 0
+
+    private val onRelay: Boolean get() = control?.readyInfo?.viaRelay == true
+
     fun setPreset(p: StreamPreset) {
-        controller.settings.update { it.copy(streamPreset = p.name, streamBitrateKbps = 0) }
+        if (onRelay) {
+            relayPick = p
+            relayKbps = 0
+        } else {
+            controller.settings.update { it.copy(streamPreset = p.name, streamBitrateKbps = 0) }
+        }
         restart.tryEmit("preset")
     }
 
     /** Bitrate changes go through `stream.config` (no restart). */
     fun setBitrate(kbps: Int) {
-        controller.settings.update { it.copy(streamBitrateKbps = kbps) }
+        if (onRelay) {
+            relayKbps = kbps
+            val c = _ui.value.relayChoice
+            if (c != null) _ui.update { it.copy(relayChoice = c.copy(kbps = kbps, loweredForRelay = false)) }
+        } else {
+            controller.settings.update { it.copy(streamBitrateKbps = kbps) }
+        }
         val s = session ?: return
         viewModelScope.launch {
             try {
@@ -272,13 +293,16 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
     private fun request(): StreamRequest {
         val st = settings.value
         val perPc = controller.prefsFor(controller.session.value?.hostId).streamPreset
-        val preset = StreamPreset.byName(perPc ?: st.streamPreset)
+        val viaRelay = onRelay
+        val choice = com.niranjan.helm.core.RelayStreamPolicy.choose(viaRelay, perPc, st.streamPreset, st.streamBitrateKbps, relayPick, relayKbps)
+        val preset = choice.preset
+        _ui.update { it.copy(viaRelay = viaRelay, relayChoice = choice.takeIf { viaRelay }) }
         val g = _g3.value
         val g3 = control?.supportsG3 == true
         val m = _ui.value.monitor
         return StreamRequest(
             preset = preset,
-            bitrateKbps = if (st.streamBitrateKbps > 0) st.streamBitrateKbps else preset.defaultKbps,
+            bitrateKbps = choice.kbps,
             audio = st.streamAudio,
             monitorId = m?.id,
             hwnd = g.window?.hwnd,

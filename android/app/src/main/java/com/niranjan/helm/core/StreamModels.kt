@@ -28,6 +28,44 @@ enum class StreamPreset(val label: String, val maxWidth: Int, val maxHeight: Int
     }
 }
 
+/** Preset + bitrate to ask for, and whether the relay lowered them (tell the user). */
+data class StreamChoice(val preset: StreamPreset, val kbps: Int, val loweredForRelay: Boolean = false)
+
+/**
+ * Relayed streams use the relay owner's quota and a longer path, so they default to 720p30 at a
+ * low bitrate. What the user picks while on the relay is honoured; a per-PC preset counts as a
+ * pick. On the LAN nothing changes.
+ */
+object RelayStreamPolicy {
+    val PRESET = StreamPreset.P720_30
+    const val DEFAULT_KBPS = 2_000
+    val BITRATES = listOf(1_000, 1_500, 2_000, 3_000, 4_500)
+
+    const val NOTICE = "Using the relay: 720p30 at 2 Mbps to save data. Change it in the controls."
+
+    fun choose(
+        viaRelay: Boolean,
+        perPc: String?,
+        global: String?,
+        globalKbps: Int,
+        relayPick: StreamPreset? = null,
+        relayKbps: Int = 0,
+    ): StreamChoice {
+        if (!viaRelay) {
+            val p = StreamPreset.byName(perPc ?: global)
+            return StreamChoice(p, if (globalKbps > 0) globalKbps else p.defaultKbps)
+        }
+        val picked = relayPick ?: perPc?.let { StreamPreset.byName(it) }
+        val preset = picked ?: PRESET
+        val kbps = when {
+            relayKbps > 0 -> relayKbps
+            preset == PRESET -> DEFAULT_KBPS
+            else -> preset.defaultKbps / 2
+        }
+        return StreamChoice(preset, kbps, loweredForRelay = picked == null && relayKbps <= 0)
+    }
+}
+
 /** What to stream: a monitor (opaque id from `screen.monitors`) or the whole primary display. */
 data class StreamRequest(
     val preset: StreamPreset,

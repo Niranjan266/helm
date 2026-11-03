@@ -57,6 +57,8 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// After `4403 key_mismatch` retrying soon will not help.
 const KEY_MISMATCH_BACKOFF: Duration = Duration::from_secs(600);
 const MAX_URL: usize = 512;
+/// The relay address offered to users (the project owner's own deployment; editable).
+pub const DEFAULT_RELAY_URL: &str = "wss://helm-relay.supportdangle-ae0.workers.dev";
 
 /// True for the `peer` label of a relayed channel.
 pub fn is_relayed_peer(peer: &str) -> bool {
@@ -80,8 +82,11 @@ pub struct RelayStatus {
     pub last_error: Option<String>,
 }
 
-/// Validate and normalise a relay base URL. `wss://` only, except `ws://` to loopback
-/// (local testing). Empty input stays empty (= no relay configured).
+/// Normalise whatever a person typed as the relay address and validate it.
+///
+/// Accepts `wss://host`, `https://host`, a bare `host`, and the easy mistake of stacking schemes
+/// (`wss://https://host`); all are stored as `wss://host`. Plain `ws://` / `http://` only to
+/// loopback (local testing). Empty input stays empty (= no relay configured).
 pub fn normalize_url(url: &str) -> Result<String, String> {
     let url = url.trim().trim_end_matches('/');
     if url.is_empty() {
@@ -93,24 +98,35 @@ pub fn normalize_url(url: &str) -> Result<String, String> {
     if url.contains(['?', '#', '@']) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("url must not contain a query, fragment, user info or spaces".into());
     }
-    let uri: Uri = url
+    // Peel every leading scheme; the outermost one says whether the user asked for plain text.
+    let mut rest = url;
+    let mut plain = None;
+    while let Some((scheme, tail)) = rest.split_once("://") {
+        match scheme.to_ascii_lowercase().as_str() {
+            "wss" | "https" => plain = plain.or(Some(false)),
+            "ws" | "http" => plain = plain.or(Some(true)),
+            _ => return Err("use a wss:// or https:// address".into()),
+        }
+        rest = tail.trim_start_matches('/');
+    }
+    let plain = plain.unwrap_or(false);
+    let normal = format!("{}://{rest}", if plain { "ws" } else { "wss" });
+    let uri: Uri = normal
         .parse()
-        .map_err(|_| "url is not a valid URL".to_string())?;
-    let scheme = uri.scheme_str().map(str::to_ascii_lowercase);
+        .map_err(|_| "url is not a valid address".to_string())?;
     let host = uri.host().ok_or("url has no host")?.to_ascii_lowercase();
     let host_bare = host.trim_start_matches('[').trim_end_matches(']');
+    if host_bare.is_empty() || matches!(host_bare, "wss" | "ws" | "https" | "http") {
+        return Err("url has no host".into());
+    }
     let loopback = host_bare == "localhost"
         || host_bare
             .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback());
-    match scheme.as_deref() {
-        Some("wss") => {}
-        Some("ws") if loopback => {}
-        Some("ws") => return Err("plain ws:// is only allowed to localhost; use wss://".into()),
-        _ => return Err("url must start with wss://".into()),
+    if plain && !loopback {
+        return Err("plain ws:// or http:// is only allowed to localhost; use wss://".into());
     }
-    let rest = &url[url.find("://").map(|i| i + 3).unwrap_or(0)..];
-    Ok(format!("{}://{rest}", scheme.unwrap_or_default()))
+    Ok(normal)
 }
 
 /// Relay settings + live status, shared by the client task and the `relay.*` methods.
@@ -179,6 +195,12 @@ impl Relay {
             .map_err(|e| format!("could not save {RELAY_FILE}: {e}"))?;
         self.settings.send_replace(next.clone());
         Ok(next)
+    }
+
+    /// The relay address to put in a pairing QR (`r=`), when the relay is on.
+    pub fn pairing_url(&self) -> Option<String> {
+        let s = self.settings();
+        (s.enabled && !s.url.is_empty()).then_some(s.url)
     }
 
     /// `system.info` `relay` field: `{enabled,url}`.
@@ -340,8 +362,29 @@ async fn connect_ws(base_url: &str, host_id: &str) -> anyhow::Result<RelayWs> {
         .max_frame_size(Some(MAX_PAYLOAD + HEADER + 1024));
     let (ws, _) = tokio_tungstenite::client_async_with_config(full, io, Some(config))
         .await
-        .context("WebSocket upgrade with the relay")?;
+        .map_err(|e| anyhow::anyhow!(upgrade_error(&e)))?;
     Ok(ws)
+}
+
+/// Why the relay would not upgrade to a WebSocket, in words for the Settings page.
+fn upgrade_error(e: &tokio_tungstenite::tungstenite::Error) -> String {
+    use tokio_tungstenite::tungstenite::Error;
+    match e {
+        Error::Http(resp) => match resp.status().as_u16() {
+            429 => "the relay is rate limiting this connection; retrying".to_string(),
+            code => format!("this address does not answer like a Helm relay (HTTP {code})"),
+        },
+        other => format!("WebSocket upgrade with the relay failed: {other}"),
+    }
+}
+
+/// Words for a relay `error` code (relay/README.md section 1.6).
+fn refusal_text(code: &str) -> String {
+    match code {
+        "key_mismatch" => "the relay knows a different key for this PC".to_string(),
+        "bad_signature" => "the relay did not accept this PC's signature".to_string(),
+        other => format!("the relay refused this PC ({other})"),
+    }
 }
 
 /// Why a relay connection ended.
@@ -409,7 +452,7 @@ async fn handshake(ws: &mut RelayWs, identity: &Identity) -> Result<(), Ended> {
             Err(Ended::Lost {
                 was_ready: false,
                 key_mismatch: code == "key_mismatch",
-                error: format!("relay refused the host: {code}"),
+                error: refusal_text(&code),
             })
         }
         _ => Err(lost(false, "unexpected reply from the relay")),
@@ -629,6 +672,8 @@ pub(crate) async fn run(
             e = connect_and_serve(&state, &acceptor, &settings.url, &mut shutdown) => e,
             r = settings_rx.changed() => {
                 if r.is_err() { return }
+                // The old connection is gone with the old settings: start from "connecting".
+                state.relay.set_status(false, None);
                 backoff.reset();
                 continue;
             }
@@ -661,6 +706,7 @@ pub(crate) async fn run(
             _ = tokio::time::sleep(delay) => {}
             r = settings_rx.changed() => {
                 if r.is_err() { return }
+                state.relay.set_status(false, None);
                 backoff.reset();
             }
             _ = shutdown.changed() => return,
@@ -707,15 +753,60 @@ mod tests {
         assert_eq!(normalize_url("").unwrap(), "");
         for bad in [
             "ws://relay.example.com",
-            "https://relay.example.com",
+            "http://relay.example.com",
+            "ws://https://relay.example.com",
+            "ftp://relay.example.com",
             "wss://",
+            "wss://https://",
+            "https:",
+            "wss://https:",
             "wss://a.com/?x=1",
             "wss://u@a.com",
-            "relay.example.com",
+            "wss://a b",
         ] {
             assert!(normalize_url(bad).is_err(), "{bad}");
         }
         assert!(normalize_url(&format!("wss://{}.com", "a".repeat(600))).is_err());
+    }
+
+    #[test]
+    fn people_can_type_the_relay_address_any_way() {
+        let want = "wss://helm-relay.example.workers.dev";
+        for typed in [
+            "wss://helm-relay.example.workers.dev",
+            "https://helm-relay.example.workers.dev",
+            "helm-relay.example.workers.dev",
+            "wss://https://helm-relay.example.workers.dev",
+            "https://wss://helm-relay.example.workers.dev/",
+            "HTTPS://helm-relay.example.workers.dev//",
+            "  wss://wss://helm-relay.example.workers.dev  ",
+        ] {
+            assert_eq!(normalize_url(typed).unwrap(), want, "{typed}");
+        }
+        assert_eq!(
+            normalize_url("http://localhost:8787").unwrap(),
+            "ws://localhost:8787"
+        );
+        assert_eq!(
+            normalize_url("localhost:8787").unwrap(),
+            "wss://localhost:8787"
+        );
+        assert_eq!(normalize_url(DEFAULT_RELAY_URL).unwrap(), DEFAULT_RELAY_URL);
+    }
+
+    #[test]
+    fn a_mistaken_saved_address_heals_on_load_and_reaches_the_qr() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(RELAY_FILE),
+            r#"{"enabled":true,"url":"wss://https://r.example.com/"}"#,
+        )
+        .unwrap();
+        let r = Relay::load(dir.path());
+        assert_eq!(r.settings().url, "wss://r.example.com");
+        assert_eq!(r.pairing_url().as_deref(), Some("wss://r.example.com"));
+        r.set(Some(false), None).unwrap();
+        assert_eq!(r.pairing_url(), None);
     }
 
     #[test]
