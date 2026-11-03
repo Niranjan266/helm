@@ -253,6 +253,7 @@ fun RemoteShell(
                         if (reconnect.isReconnecting) {
                             ReconnectBanner(session.name, reconnect, onRetry = main::reconnectNow, onDisconnect = main::disconnect)
                         }
+                        if (screen == Screen.DOCK) UpdateBanner(Modifier.padding(12.dp))
                         if (online && !remoteUi.phase1) {
                             HintText(
                                 "This PC's Helm agent is older and does not offer remote control yet. Update Helm on the PC.",

@@ -1,22 +1,17 @@
 //! Tauri commands the window calls (`window.__TAURI__.core.invoke`).
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use helm_agent::g4::PendingPairing;
 use helm_agent::router::Tier;
-use helm_agent::update::{self, UpdateStatus};
-use serde::Serialize;
 use tauri::State;
 
 use crate::activity::Entry;
 use crate::controller::{CodeView, Controller, PairingView, PhoneView, SettingsView, StatusView};
 use crate::settings::{Settings, validate_port};
+use crate::updater::{UpdateView, Updates};
 
 type Ctl<'a> = State<'a, Arc<Controller>>;
-
-/// Last "update available" result, so Download does not have to check again.
-#[derive(Default)]
-pub struct UpdateCache(pub Mutex<Option<UpdateStatus>>);
 
 #[tauri::command]
 pub fn get_status(ctl: Ctl<'_>) -> StatusView {
@@ -127,44 +122,20 @@ pub async fn set_paused(ctl: Ctl<'_>, paused: bool) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Serialize)]
-pub struct UpdateView {
-    /// "disabled" | "uptodate" | "available" | "failed"
-    pub state: &'static str,
-    pub summary: String,
+#[tauri::command]
+pub fn get_update(updates: State<'_, Updates>) -> UpdateView {
+    updates.view()
 }
 
 #[tauri::command]
-pub async fn check_updates(cache: State<'_, UpdateCache>) -> Result<UpdateView, String> {
-    let status = tauri::async_runtime::spawn_blocking(update::check)
-        .await
-        .map_err(|e| e.to_string())?;
-    let state = match &status {
-        UpdateStatus::Disabled => "disabled",
-        UpdateStatus::UpToDate => "uptodate",
-        UpdateStatus::Available(_) => "available",
-        UpdateStatus::Failed(_) => "failed",
-    };
-    let summary = status.summary();
-    *cache.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(status);
-    Ok(UpdateView { state, summary })
+pub async fn check_updates(app: tauri::AppHandle) -> Result<UpdateView, String> {
+    Ok(crate::updater::check_now(&app).await)
 }
 
-/// Download + verify the installer found by the last check and show it in Explorer.
-/// Nothing is installed or run.
+/// Download + verify the installer found by the last check, run it and quit.
 #[tauri::command]
-pub async fn download_update(cache: State<'_, UpdateCache>) -> Result<String, String> {
-    let candidate = match cache.0.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
-        Some(UpdateStatus::Available(c)) => c.clone(),
-        _ => return Err("Check for updates first.".into()),
-    };
-    let path = tauri::async_runtime::spawn_blocking(move || update::download(&candidate))
-        .await
-        .map_err(|e| e.to_string())??;
-    if let Some(folder) = path.parent() {
-        let _ = helm_win_apps::open_target(&folder.to_string_lossy());
-    }
-    Ok(path.display().to_string())
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    crate::updater::install(&app).await
 }
 
 #[tauri::command]

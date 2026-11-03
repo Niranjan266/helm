@@ -145,6 +145,109 @@ fn arch_token_matching() {
     assert_eq!(pick(&["helm-arm64.exe", "helm-xx64.exe"]), None);
 }
 
+/// One asset of a release laid out the way `scripts/release.ps1` publishes it.
+fn release_of_our_assets(extra: &[&str]) -> Vec<helm_update::Release> {
+    let mut names: Vec<String> = Vec::new();
+    for base in [
+        "Helm-android.apk",
+        "Helm-windows-x64.exe",
+        "Helm-windows-x64-setup.exe",
+        "helm-agent.exe",
+    ] {
+        names.push(base.into());
+        names.push(format!("{base}.sig"));
+        names.push(format!("{base}.sha256"));
+    }
+    names.push("SHA256SUMS".into());
+    names.extend(extra.iter().map(|s| s.to_string()));
+    let assets: Vec<_> = names
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "name": n,
+                "size": 4096,
+                "browser_download_url": format!("https://github.com/example/helm/releases/download/v0.3.0/{n}"),
+            })
+        })
+        .collect();
+    let json = serde_json::json!([{ "tag_name": "v0.3.0", "assets": assets }]);
+    parse_releases(&serde_json::to_vec(&json).unwrap()).unwrap()
+}
+
+#[test]
+fn accepts_our_release_names_and_prefers_the_nsis_setup() {
+    let c = select_update(&release_of_our_assets(&[]), &v("0.2.0"), Arch::X64).unwrap();
+    assert_eq!(c.package.name, helm_update::release::WINDOWS_SETUP_ASSET);
+    assert_eq!(c.signature.name, "Helm-windows-x64-setup.exe.sig");
+    assert_eq!(c.checksum.name, "Helm-windows-x64-setup.exe.sha256");
+
+    // Also when the Inno Setup package is published next to it, in either order.
+    let c = select_update(
+        &release_of_our_assets(&[
+            "Helm-Setup-0.3.0-x64.exe",
+            "Helm-Setup-0.3.0-x64.exe.sig",
+            "Helm-Setup-0.3.0-x64.exe.sha256",
+        ]),
+        &v("0.2.0"),
+        Arch::X64,
+    )
+    .unwrap();
+    assert_eq!(c.package.name, helm_update::release::WINDOWS_SETUP_ASSET);
+}
+
+#[test]
+fn a_setup_is_preferred_over_the_portable_exe() {
+    let asset = |n: &str| Asset {
+        name: n.into(),
+        browser_download_url: format!("https://x/{n}"),
+        size: 1,
+    };
+    let assets = [
+        asset("Helm-windows-x64.exe"),
+        asset("Helm-Setup-1.0.0-x64.exe"),
+    ];
+    assert_eq!(
+        helm_update::release::pick_package(&assets, Arch::X64)
+            .unwrap()
+            .name,
+        "Helm-Setup-1.0.0-x64.exe"
+    );
+}
+
+// ---------------------------------------------------------------- the compiled-in key
+
+#[test]
+fn no_or_bad_key_refuses_updates() {
+    let cfg = || config(&temp_dir());
+    let empty = || MemFetcher {
+        files: HashMap::new(),
+        log: RefCell::new(Vec::new()),
+    };
+    for key in [None, Some(""), Some("abcd"), Some("not hex at all")] {
+        assert!(matches!(
+            Updater::with_key_hex(cfg(), key, empty()),
+            Err(Error::NoPublicKey)
+        ));
+    }
+    let good = hex::encode(test_key().verifying_key().as_bytes());
+    assert!(Updater::with_key_hex(cfg(), Some(&good), empty()).is_ok());
+}
+
+#[test]
+fn committed_public_key_is_valid() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../keys/update-ed25519.pub"
+    ))
+    .unwrap();
+    assert!(parse_public_key(&text).is_ok());
+    // Builds use it unless HELM_UPDATE_PUBKEY overrides it.
+    if std::env::var_os("HELM_UPDATE_PUBKEY").is_none() {
+        assert_eq!(helm_update::COMPILED_PUBLIC_KEY_HEX, Some(text.trim()));
+        assert!(helm_update::compiled_public_key().is_some());
+    }
+}
+
 // ---------------------------------------------------------------- signatures
 
 #[test]
@@ -310,6 +413,26 @@ fn corrupted_download_is_rejected_and_removed() {
     ));
     assert!(!dir.join(PKG_NAME).exists());
     assert!(!dir.join(format!("{PKG_NAME}.part")).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn failed_verification_also_removes_an_earlier_download() {
+    let dir = temp_dir();
+    let pkg = package_bytes();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(PKG_NAME), b"left over from an earlier attempt").unwrap();
+    let mut bad = pkg.clone();
+    bad[0] ^= 0xFF;
+    let key = test_key();
+    let up = Updater::with_key(
+        config(&dir),
+        key.verifying_key(),
+        fetcher_with(bad, &pkg, &key),
+    );
+    let c = up.check().unwrap().unwrap();
+    assert!(up.download_and_verify(&c).is_err());
+    assert!(!dir.join(PKG_NAME).exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

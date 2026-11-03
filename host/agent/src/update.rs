@@ -1,12 +1,14 @@
 //! Phase 5 update check (`helm-update`): GitHub Releases + SHA-256 + Ed25519.
 //!
-//! The agent only checks and, on request, downloads and verifies the installer. It never
-//! installs anything by itself. Builds without a compiled-in release key
-//! (`HELM_UPDATE_PUBKEY`) refuse to check at all.
+//! This module only checks and, on request, downloads and verifies the installer. Running it is
+//! the desktop app's job, and only when the user asks (`host/desktop/src/updater.rs`). Builds
+//! without a compiled-in release key refuse to check at all.
 
 use std::path::PathBuf;
 
-use helm_update::{Fetcher, UpdateCandidate, UpdateConfig, Updater, Version};
+pub use helm_update::release::WINDOWS_SETUP_ASSET;
+pub use helm_update::{Asset, UpdateCandidate, Version};
+use helm_update::{Fetcher, UpdateConfig, Updater};
 
 use crate::proto::AGENT_VERSION;
 
@@ -125,11 +127,17 @@ mod tests {
 
     #[test]
     fn no_key_means_disabled() {
-        // Test builds never set HELM_UPDATE_PUBKEY.
+        // Only in a build with no key (HELM_UPDATE_PUBKEY=""); the check then never hits the net.
         if helm_update::compiled_public_key().is_none() {
             assert_eq!(check(), UpdateStatus::Disabled);
             assert!(check().summary().contains("disabled"));
         }
+    }
+
+    #[test]
+    fn no_key_refuses_at_the_updater_too() {
+        let up = Updater::with_key_hex(config(), Some(""), Fixture(Vec::new()));
+        assert!(matches!(up, Err(helm_update::Error::NoPublicKey)));
     }
 
     #[test]

@@ -169,10 +169,12 @@ class MainActivity : FragmentActivity() {
         super.onStart()
         appLock.onStart()
         (application as HelmApp).controller.setUiVisible(true)
+        (application as HelmApp).updates.onAppVisible(true)
     }
 
     override fun onStop() {
         (application as HelmApp).controller.setUiVisible(false)
+        (application as HelmApp).updates.onAppVisible(false)
         appLock.onStop()
         super.onStop()
     }

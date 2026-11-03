@@ -60,6 +60,9 @@ class HelmApp : Application() {
     lateinit var controller: HelmController
         private set
 
+    /** In-app updates (Settings + home banner). */
+    val updates by lazy { com.niranjan.helm.device.AppUpdater(this) }
+
     override fun onCreate() {
         super.onCreate()
         controller = HelmController(this)

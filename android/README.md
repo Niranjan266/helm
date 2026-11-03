@@ -44,6 +44,21 @@ every 60 s). New code: `core/EverydayModels.kt`, `core/HelmApiG6.kt`, `device/Ev
 `device/PhoneRinger.kt`, `device/RingActivity.kt`, `ui/EverydayViewModel.kt` and the screens.
 Every g6 call is gated on the hello feature.
 
+In-app updates: Settings shows the version and "Check for updates"; a banner on the PC list and
+the Dock shows when a newer release exists (background check at most daily, when the app comes to
+the foreground). Install downloads `Helm-android.apk` from GitHub Releases with progress, checks
+size, SHA-256 and the Ed25519 signature against `keys/update-ed25519.pub` (compiled into
+`BuildConfig`), and hands only a verified file to `PackageInstaller`; a bad file is deleted. Logic
+in `core/AppUpdate.kt` (`AppUpdateTest`), Android side in `device/AppUpdater.kt` and `ui/UpdateUi.kt`.
+
+## Release signing
+
+`assembleRelease` signs with `HELM_ANDROID_KEYSTORE` / `HELM_ANDROID_KEYSTORE_PASSWORD` (optional
+`HELM_ANDROID_KEY_ALIAS`, `HELM_ANDROID_KEY_PASSWORD`) or, failing that, `~/.helm/android-release.p12`
+and `~/.helm/android-keystore-password.txt`. Without a keystore it builds an unsigned APK; debug
+builds always use the debug key, so nobody needs the release key to build. An app signed with one
+key cannot update to another: a phone with a debug or older build must uninstall once.
+
 ## Layout
 
 ```
