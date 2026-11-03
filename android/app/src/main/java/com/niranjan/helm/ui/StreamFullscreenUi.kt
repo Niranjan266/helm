@@ -15,6 +15,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -169,6 +170,9 @@ fun FullscreenToolbar(
     landscapeLock: Boolean,
     keyboardOn: Boolean,
     onKeyboard: (Boolean) -> Unit,
+    penMode: Boolean,
+    penAvailable: Boolean,
+    onPen: (Boolean) -> Unit,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -225,6 +229,12 @@ fun FullscreenToolbar(
             if (g3.supported) {
                 OutlineButton(onClick = { pickWindow = true }) { Text(if (g3.window != null) "Window ✓" else "Window…") }
             }
+            if (g3.supported) {
+                BpFilterChip(selected = g3.dragMode, onClick = { vm.setDragMode(!g3.dragMode) }, label = { Text("Drag mode") })
+            }
+            if (penAvailable) {
+                BpFilterChip(selected = penMode, onClick = { onPen(!penMode) }, label = { Text("Pen mode") })
+            }
             BpFilterChip(selected = settings.streamAudio, onClick = { vm.setAudio(!settings.streamAudio) }, label = { Text("Sound") })
             BpFilterChip(selected = !settings.streamDirectTouch, onClick = { vm.setDirectTouch(false) }, label = { Text("Trackpad") })
             BpFilterChip(selected = settings.streamDirectTouch, onClick = { vm.setDirectTouch(true) }, label = { Text("Touch") })
@@ -267,8 +277,8 @@ private fun <T> ToolbarPicker(state: ToolbarState, label: String, items: List<T>
  * FloatingKeyboard composable when it lands.
  */
 @Composable
-fun FullscreenKeyboardSlot(remote: RemoteViewModel, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().imePadding().background(Bp.c.panel.copy(alpha = 0.92f))) {
-        StreamKeyboard(remote) // <- FloatingKeyboard swap: single call site
+fun FullscreenKeyboardSlot(remote: RemoteViewModel, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize()) {
+        FloatingKeyboard(rememberFloatingKeyboardState(), remote::sendAll, onClose)
     }
 }
