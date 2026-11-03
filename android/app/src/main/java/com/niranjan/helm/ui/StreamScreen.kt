@@ -4,7 +4,13 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,7 +46,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.niranjan.helm.core.AbsMoveBatcher
+import com.niranjan.helm.core.Orientation
 import com.niranjan.helm.core.SecondScreen
+import com.niranjan.helm.core.StreamFullscreen
 import com.niranjan.helm.core.ViewTransform
 import com.niranjan.helm.device.Settings
 import kotlin.math.roundToInt
@@ -62,13 +70,31 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
     var penMode by remember { mutableStateOf(false) }
     val g3 by vm.g3.collectAsStateWithLifecycle()
     val metrics = androidx.compose.ui.platform.LocalContext.current.resources.displayMetrics
+    val config = LocalConfiguration.current
+    val landscape = config.screenWidthDp > config.screenHeightDp
+    val fill by vm.fill.collectAsStateWithLifecycle()
+    val landscapeLock by vm.landscapeLock.collectAsStateWithLifecycle()
+    val exited by vm.fullscreenExited.collectAsStateWithLifecycle()
+    val fullscreen = StreamFullscreen.active(landscape, exited)
+    val toolbar = rememberToolbarState()
+    // Set before the first stream.start so it already asks for the phone's landscape size.
     vm.phoneScreen = metrics.widthPixels to metrics.heightPixels
-    // G3 second screen / rotation lock: orientation follows the mirrored monitor.
+    vm.displayLandscape = landscape
+    LaunchedEffect(landscape, metrics.widthPixels, metrics.heightPixels) {
+        vm.onDisplay(landscape, metrics.widthPixels, metrics.heightPixels)
+        if (!landscape) vm.resetFullscreenExit()
+    }
+    // G3 second screen / rotation lock: orientation follows the mirrored monitor; otherwise the
+    // landscape lock keeps the phone sideways so the tab is full screen.
     val shownMonitor = ui.monitor ?: remoteUi.monitors.firstOrNull { it.isPrimary }
+    val g3Orientation = SecondScreen.orientation(g3.rotation, shownMonitor?.width ?: 0, shownMonitor?.height ?: 0)
     RotationLockEffect(
-        SecondScreen.orientation(g3.rotation, shownMonitor?.width ?: 0, shownMonitor?.height ?: 0),
+        if (g3Orientation == Orientation.UNSPECIFIED && landscapeLock) Orientation.LANDSCAPE else g3Orientation,
         keepScreenOn = g3.secondScreen,
     )
+    ImmersiveEffect(fullscreen)
+    BackHandler(enabled = fullscreen) { vm.exitFullscreen() }
+    val toggleControls: () -> Unit = { if (fullscreen) toolbar.toggle() else showControls = !showControls }
     LaunchedEffect(g3.secondScreen) { if (g3.secondScreen) showControls = false }
 
     // Stream only while this screen is visible and the app is in the foreground.
@@ -109,11 +135,95 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
     LaunchedEffect(settings.streamDirectTouch) {
         if (settings.streamDirectTouch) return@LaunchedEffect
         vm.cursor.collect { c ->
-            if (c != null && transform.zoom > 1.01f) {
+            if (c != null && transform.canPan) {
                 val (x, y) = transform.toView(c.x, c.y)
                 transform = transform.ensureVisible(x, y, 48f)
             }
         }
+    }
+
+    LaunchedEffect(fullscreen, fill) { transform = transform.withFill(fullscreen && fill) }
+
+    // The video stage: size tracking and the gesture layer for the current mode.
+    val stageModifier = Modifier
+        .clipToBounds()
+        .background(Color.Black)
+        .onSizeChanged { s: IntSize -> transform = transform.withView(s.width.toFloat(), s.height.toFloat()) }
+        .then(
+            // Pen mode: the stylus overlay owns input; finger gestures are off.
+            if (penMode && remoteUi.phase5) {
+                Modifier
+            } else if (g3.secondScreen) {
+                Modifier.viewOnlyGestures { toggleControls() }
+            } else if (g3.dragMode) {
+                Modifier.dragSelectGestures(
+                    direct = settings.streamDirectTouch,
+                    speed = settings.touchpadSpeed,
+                    haptics = settings.haptics,
+                    remote = remote,
+                    abs = absBatcher,
+                    transform = { transform },
+                    setTransform = { transform = it },
+                    onThreeFingerTap = toggleControls,
+                )
+            } else Modifier.streamGestures(
+                direct = settings.streamDirectTouch,
+                speed = settings.touchpadSpeed,
+                haptics = settings.haptics,
+                remote = remote,
+                abs = absBatcher,
+                transform = { transform },
+                setTransform = { transform = it },
+                onThreeFingerTap = toggleControls,
+            ),
+        )
+    val stage: @Composable BoxScope.() -> Unit = {
+        VideoSurface(vm, ui, transform)
+        CursorOverlay(vm, ui, transform, remoteUi.monitors.firstOrNull { it.id == ui.monitor?.id }?.width
+            ?: remoteUi.monitors.firstOrNull { it.isPrimary }?.width)
+        if (penMode && remoteUi.phase5) PenOverlay({ transform }, remote::send, Modifier.fillMaxSize())
+        if (settings.streamShowStats) StatsOverlay(ui, Modifier.align(Alignment.TopStart).padding(8.dp))
+        if (ui.relayChoice?.loweredForRelay == true && ui.streaming) {
+            MonoLabel(
+                com.niranjan.helm.core.RelayStreamPolicy.NOTICE,
+                color = Color.White,
+                modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp),
+            )
+        }
+        if (!ui.streaming) StatusOverlay(ui, onRetry = { vm.setActive(false); vm.setActive(true) }, Modifier.align(Alignment.Center))
+        if ((fullscreen || !showControls) && extrasUi.recording != null) RecordingDot(extrasUi, Modifier.align(Alignment.TopStart).padding(8.dp))
+        if (!fullscreen && !showControls) {
+            OutlineButton(filled = true,
+                onClick = { showControls = true },
+                modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+            ) { Text("Controls") }
+        }
+    }
+
+    if (fullscreen) {
+        // Landscape: the picture fills the display (padded clear of any cutout).
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.displayCutout).then(stageModifier), content = stage)
+            EdgeRevealStrip(toolbar, Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout))
+            FullscreenToolbar(
+                state = toolbar,
+                vm = vm,
+                ui = ui,
+                settings = settings,
+                g3 = g3,
+                monitors = remoteUi.monitors,
+                windows = remoteUi.windows,
+                fill = fill,
+                fillUseful = transform.fillUseful,
+                landscapeLock = landscapeLock,
+                keyboardOn = showKeyboard,
+                onKeyboard = { showKeyboard = it },
+                onExit = { vm.exitFullscreen() },
+                modifier = Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout),
+            )
+            if (showKeyboard) FullscreenKeyboardSlot(remote, Modifier.align(Alignment.BottomCenter))
+        }
+        return
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -127,6 +237,8 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 onKeyboard = { showKeyboard = it },
                 onResetView = { transform = transform.reset() },
                 onHide = { showControls = false },
+                landscapeLock = landscapeLock,
+                onLandscapeLock = vm::setLandscapeLock,
             )
             if (g3.supported) G3Controls(vm, g3, remoteUi.windows, remoteUi.monitors)
             if (remoteUi.phase5) {
@@ -139,63 +251,7 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 )
             }
         }
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clipToBounds()
-                .background(Color.Black)
-                .onSizeChanged { s: IntSize -> transform = transform.withView(s.width.toFloat(), s.height.toFloat()) }
-                .then(
-                    // Pen mode: the stylus overlay owns input; finger gestures are off.
-                    if (penMode && remoteUi.phase5) {
-                        Modifier
-                    } else if (g3.secondScreen) {
-                        Modifier.viewOnlyGestures { showControls = !showControls }
-                    } else if (g3.dragMode) {
-                        Modifier.dragSelectGestures(
-                            direct = settings.streamDirectTouch,
-                            speed = settings.touchpadSpeed,
-                            haptics = settings.haptics,
-                            remote = remote,
-                            abs = absBatcher,
-                            transform = { transform },
-                            setTransform = { transform = it },
-                            onThreeFingerTap = { showControls = !showControls },
-                        )
-                    } else Modifier.streamGestures(
-                        direct = settings.streamDirectTouch,
-                        speed = settings.touchpadSpeed,
-                        haptics = settings.haptics,
-                        remote = remote,
-                        abs = absBatcher,
-                        transform = { transform },
-                        setTransform = { transform = it },
-                        onThreeFingerTap = { showControls = !showControls },
-                    ),
-                ),
-        ) {
-            VideoSurface(vm, ui, transform)
-            CursorOverlay(vm, ui, transform, remoteUi.monitors.firstOrNull { it.id == ui.monitor?.id }?.width
-                ?: remoteUi.monitors.firstOrNull { it.isPrimary }?.width)
-            if (penMode && remoteUi.phase5) PenOverlay({ transform }, remote::send, Modifier.fillMaxSize())
-            if (settings.streamShowStats) StatsOverlay(ui, Modifier.align(Alignment.TopStart).padding(8.dp))
-            if (ui.relayChoice?.loweredForRelay == true && ui.streaming) {
-                MonoLabel(
-                    com.niranjan.helm.core.RelayStreamPolicy.NOTICE,
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp),
-                )
-            }
-            if (!ui.streaming) StatusOverlay(ui, onRetry = { vm.setActive(false); vm.setActive(true) }, Modifier.align(Alignment.Center))
-            if (!showControls && extrasUi.recording != null) RecordingDot(extrasUi, Modifier.align(Alignment.TopStart).padding(8.dp))
-            if (!showControls) {
-                OutlineButton(filled = true, 
-                    onClick = { showControls = true },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
-                ) { Text("Controls") }
-            }
-        }
+        Box(Modifier.weight(1f).fillMaxWidth().then(stageModifier), content = stage)
         if (showKeyboard) StreamKeyboard(remote)
     }
 }
