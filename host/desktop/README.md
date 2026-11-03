@@ -6,8 +6,16 @@ window only hides it, so phones stay connected; **Quit Helm** in the tray stops 
 
 - Pages: Home (status, details, phones, pairing QR with countdown, log), Phones (access level,
   revoke), Pair, Activity (`audit.log`), Settings (Start with Windows, port, pause, relay,
-  update check — updates are only downloaded and verified, never run).
-- Tray: Open Helm, Show pairing QR, Pause/Resume connections, Quit Helm.
+  updates).
+- Updates (`src/updater.rs`): checks GitHub Releases at startup and daily; "Update available vX →
+  Install" in Settings and the tray. Install downloads `Helm-windows-x64-setup.exe` through
+  `helm-update` (HTTPS, size, SHA-256, Ed25519; a bad file is refused and deleted), runs it
+  silently (`/S /R /ARGS --hidden`), and Helm comes back hidden with phones reconnecting by
+  themselves. If the installer fails the old Helm is started again. A portable copy (no
+  `uninstall.exe` next to it) runs the same installer, then the installed Helm copies itself over
+  the old file and takes over Start with Windows. Refused when no release key is compiled in.
+- Tray: Open Helm, Show pairing QR, Pause/Resume connections, Quit Helm, and the update item while
+  one is on offer.
 - One copy per user (`tauri-plugin-single-instance`); starting it again focuses the window.
   It also refuses to run the agent next to a console `helm-agent.exe` on the same data folder.
 - Start with Windows writes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Helm` =

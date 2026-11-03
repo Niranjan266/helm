@@ -1,6 +1,7 @@
 //! Notification-area icon and menu (the desktop app owns the tray; the agent runs without one).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -8,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::controller::{Controller, NAVIGATE_EVENT};
 use crate::status::{self, RunState};
+use crate::updater::{self, UpdateView};
 
 pub const TRAY_ID: &str = "helm";
 pub const MAIN_WINDOW: &str = "main";
@@ -15,6 +17,10 @@ pub const MAIN_WINDOW: &str = "main";
 /// Menu items whose text changes.
 pub struct TrayItems {
     pause: MenuItem<Wry>,
+    menu: Menu<Wry>,
+    /// "Update available vX → Install": in the menu only while an update is on offer.
+    update: MenuItem<Wry>,
+    update_shown: AtomicBool,
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
@@ -22,6 +28,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let pair = MenuItem::with_id(app, "pair", "Show pairing QR", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause connections", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Helm", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "Install update", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&open, &pair, &sep1, &pause, &sep2, &quit])?;
@@ -33,6 +40,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "open" => show_main(app),
             "pair" => show_pairing(app),
             "pause" => toggle_pause(app),
+            "update" => updater::install_from_tray(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -50,8 +58,40 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
-    app.manage(TrayItems { pause });
+    app.manage(TrayItems {
+        pause,
+        menu,
+        update,
+        update_shown: AtomicBool::new(false),
+    });
     Ok(())
+}
+
+/// Show, relabel or remove the update item to match the update state.
+pub fn set_update(app: &AppHandle, view: &UpdateView) {
+    let Some(items) = app.try_state::<TrayItems>() else {
+        return;
+    };
+    let installing = view.state == "installing";
+    let text = match (&view.version, installing) {
+        (Some(_), true) => Some("Installing update…".to_string()),
+        (Some(v), false) => Some(updater::tray_label(v)),
+        (None, _) => None,
+    };
+    let _ = items.update.set_enabled(!installing);
+    match text {
+        Some(text) => {
+            let _ = items.update.set_text(text);
+            if !items.update_shown.swap(true, Ordering::Relaxed) {
+                let _ = items.menu.insert(&items.update, 0);
+            }
+        }
+        None => {
+            if items.update_shown.swap(false, Ordering::Relaxed) {
+                let _ = items.menu.remove(&items.update);
+            }
+        }
+    }
 }
 
 /// Update the tooltip and the pause item after a status change.

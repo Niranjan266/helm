@@ -12,6 +12,7 @@ mod controller;
 mod settings;
 mod status;
 mod tray;
+mod updater;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -56,7 +57,7 @@ fn main() {
                 SecondLaunch::ShowPairing => tray::show_pairing(app),
             }
         }))
-        .manage(commands::UpdateCache::default())
+        .manage(updater::Updates::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::get_phones,
@@ -76,8 +77,9 @@ fn main() {
             commands::set_port,
             commands::set_relay,
             commands::set_paused,
+            commands::get_update,
             commands::check_updates,
-            commands::download_update,
+            commands::install_update,
             commands::open_data_dir,
             commands::quit_app,
         ])
@@ -85,6 +87,7 @@ fn main() {
             let ctl = Arc::new(Controller::new(app.handle().clone(), data_dir.clone()));
             app.manage(ctl.clone());
             tray::create(app.handle())?;
+            updater::start_background(app.handle().clone());
             if !launch.hidden {
                 tray::show_main(app.handle());
             }
