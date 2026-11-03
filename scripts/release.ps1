@@ -1,25 +1,34 @@
 <#
 .SYNOPSIS
     Builds a Helm release: bumps versions, runs every test, builds the desktop app (Helm.exe),
-    the console agent, the service, the Android APK and the Windows installers, and writes
-    SHA256SUMS.
+    the console agent, the service, the Android APK and the Windows installers, signs every
+    asset for the in-app updaters and writes SHA256SUMS.
 
 .DESCRIPTION
+    0. Checks the signing keys first (see SIGNING below), so a release cannot fail at the end.
     1. Sets the version in host/agent/Cargo.toml, host/desktop/Cargo.toml,
-       host/crates/helm-service/Cargo.toml and android/app/build.gradle.kts
-       (versionName = -Version, versionCode + 1).
+       host/desktop/tauri.conf.json, host/crates/helm-service/Cargo.toml and
+       android/app/build.gradle.kts (versionName = -Version, versionCode + 1).
     2. Runs scripts/test-all.ps1 (full, including clippy and the real-agent E2E) unless -SkipTests.
     3. cargo tauri build in host/desktop (Helm.exe + NSIS installer; installs tauri-cli if
        missing), then cargo build --release for host/agent (console agent, for developers and
        helm-service) and host/crates/helm-service.
-    4. gradlew assembleRelease. The APK is left unsigned unless a keystore is configured with
-       HELM_ANDROID_KEYSTORE, HELM_ANDROID_KEYSTORE_PASSWORD and HELM_ANDROID_KEY_ALIAS
-       (optional HELM_ANDROID_KEY_PASSWORD); passwords are read by apksigner from the
-       environment, never put on the command line.
+    4. gradlew assembleRelease, signed by the Gradle config with the release keystore. The
+       signature is checked with apksigner when it is available.
     5. Compiles host/installer/helm.iss with Inno Setup's ISCC if it is installed.
     6. Copies everything to dist/v<version>/ (Helm.exe as Helm-windows-x64.exe, the asset
-       scripts/install.ps1 downloads) and writes dist/v<version>/SHA256SUMS.
+       scripts/install.ps1 downloads; the NSIS installer as Helm-windows-x64-setup.exe, the
+       one the desktop updater runs; the APK as Helm-android.apk), signs each file with
+       helm-sign (<asset>.sig + <asset>.sha256), verifies them against the committed public
+       key and writes dist/v<version>/SHA256SUMS.
     7. Only with -Publish: `gh release create v<version>` with those files.
+
+    SIGNING. Private material lives outside the repository, in %USERPROFILE%\.helm:
+      update-ed25519.key             Ed25519 update key (HELM_UPDATE_SIGNING_KEY overrides the path)
+      android-release.p12            Android keystore (HELM_ANDROID_KEYSTORE)
+      android-keystore-password.txt  its password (HELM_ANDROID_KEYSTORE_PASSWORD)
+    The update key must match keys/update-ed25519.pub or the release stops. Without the keys
+    the release stops too, unless -Unsigned is given (a test build: updaters will ignore it).
 
     Nothing is committed or tagged locally; commit and push the version bump yourself
     before publishing so the release tag points at the right commit.
@@ -34,6 +43,7 @@ param(
     [switch]$SkipTests,
     [switch]$Publish,
     [switch]$Draft,
+    [switch]$Unsigned,
     [string]$NotesFile
 )
 
@@ -53,6 +63,14 @@ $Iss        = Join-Path $RepoRoot 'host\installer\helm.iss'
 $Dist       = Join-Path $RepoRoot "dist\v$Version"
 $Tag        = "v$Version"
 $Utf8NoBom  = New-Object System.Text.UTF8Encoding($false)
+$KeyDir     = Join-Path $env:USERPROFILE '.helm'
+$PubKeyFile = Join-Path $RepoRoot 'keys\update-ed25519.pub'
+$SignKey    = if ($env:HELM_UPDATE_SIGNING_KEY) { $env:HELM_UPDATE_SIGNING_KEY } else { Join-Path $KeyDir 'update-ed25519.key' }
+$Keystore   = if ($env:HELM_ANDROID_KEYSTORE) { $env:HELM_ANDROID_KEYSTORE } else { Join-Path $KeyDir 'android-release.p12' }
+$KeystorePw = Join-Path $KeyDir 'android-keystore-password.txt'
+$HelmSign   = Join-Path $RepoRoot 'host\crates\helm-update\target\release\examples\helm-sign.exe'
+
+if ($Unsigned -and $Publish) { throw '-Unsigned builds cannot be published' }
 
 if (-not $env:JAVA_HOME) {
     $studioJbr = 'C:\Program Files\Android\Android Studio\jbr'
@@ -85,6 +103,15 @@ function Set-CargoVersion([string]$Path) {
     $re = New-Object System.Text.RegularExpressions.Regex('(?m)^version\s*=\s*"[^"]*"')
     if (-not $re.IsMatch($text)) { throw "no version line in $Path" }
     Set-FileText $Path ($re.Replace($text, "version = `"$Version`"", 1))
+    Write-Host "  $Path -> $Version"
+}
+
+# tauri.conf.json carries the version the NSIS installer is named after.
+function Set-TauriVersion([string]$Path) {
+    $text = [System.IO.File]::ReadAllText($Path)
+    $re = New-Object System.Text.RegularExpressions.Regex('"version"\s*:\s*"[^"]*"')
+    if (-not $re.IsMatch($text)) { throw "no version in $Path" }
+    Set-FileText $Path ($re.Replace($text, "`"version`": `"$Version`"", 1))
     Write-Host "  $Path -> $Version"
 }
 
@@ -139,10 +166,27 @@ function Find-BuildTool([string]$Name) {
     return $null
 }
 
+# ---------------------------------------------------------------- 0. signing keys
+$haveKeys = $false
+if (-not $Unsigned) {
+    Write-Stage 'Checking the signing keys'
+    if (-not (Test-Path $SignKey)) { throw "update signing key not found: $SignKey (or pass -Unsigned for a test build)" }
+    if (-not (Test-Path $Keystore)) { throw "Android keystore not found: $Keystore (or pass -Unsigned for a test build)" }
+    if (-not $env:HELM_ANDROID_KEYSTORE_PASSWORD -and -not (Test-Path $KeystorePw)) { throw "Android keystore password not found: $KeystorePw" }
+    Invoke-Native $RepoRoot 'cargo' @('build', '--release', '--example', 'helm-sign', '--manifest-path', 'host\crates\helm-update\Cargo.toml')
+    $expectedPub = (Get-Content $PubKeyFile -Raw).Trim()
+    $actualPub = (& $HelmSign pubkey $SignKey | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'helm-sign could not read the update signing key' }
+    if ($actualPub -ne $expectedPub) { throw "$SignKey does not match keys/update-ed25519.pub; apps would refuse this release" }
+    $haveKeys = $true
+    Write-Host "  update key matches keys/update-ed25519.pub; keystore: $Keystore"
+}
+
 # ---------------------------------------------------------------- 1. version bump
 Write-Stage "Setting version $Version"
 Set-CargoVersion (Join-Path $AgentDir 'Cargo.toml')
 Set-CargoVersion (Join-Path $DesktopDir 'Cargo.toml')
+Set-TauriVersion (Join-Path $DesktopDir 'tauri.conf.json')
 Set-CargoVersion (Join-Path $ServiceDir 'Cargo.toml')
 Set-AndroidVersion (Join-Path $AndroidDir 'app\build.gradle.kts')
 
@@ -191,30 +235,20 @@ if (-not $builtApk) { throw "no APK in $apkDir" }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 Get-ChildItem $Dist -File | Remove-Item -Force
 
-$apkOut = $null
-$haveKeystore = $env:HELM_ANDROID_KEYSTORE -and $env:HELM_ANDROID_KEYSTORE_PASSWORD -and $env:HELM_ANDROID_KEY_ALIAS
-if ($builtApk.Name -notmatch 'unsigned') {
-    $apkOut = Join-Path $Dist "Helm-$Version.apk"
-    Copy-Item $builtApk.FullName $apkOut
-    Write-Host "  APK signed by the Gradle config: $($builtApk.Name)"
-} elseif ($haveKeystore) {
-    $zipalign  = Find-BuildTool 'zipalign.exe'
+$signedApk = $builtApk.Name -notmatch 'unsigned'
+if ($haveKeys -and -not $signedApk) { throw "Gradle built an unsigned APK ($($builtApk.Name)) although the keystore exists" }
+if ($signedApk) {
     $apksigner = Find-BuildTool 'apksigner.bat'
-    if (-not $zipalign -or -not $apksigner) { throw 'keystore configured but zipalign/apksigner not found in the Android SDK build-tools' }
-    $aligned = Join-Path $Dist 'aligned.apk'
-    $apkOut  = Join-Path $Dist "Helm-$Version.apk"
-    Invoke-Native $Dist $zipalign @('-p', '-f', '4', $builtApk.FullName, $aligned)
-    $signArgs = @('sign', '--ks', $env:HELM_ANDROID_KEYSTORE, '--ks-pass', 'env:HELM_ANDROID_KEYSTORE_PASSWORD',
-        '--ks-key-alias', $env:HELM_ANDROID_KEY_ALIAS, '--out', $apkOut)
-    if ($env:HELM_ANDROID_KEY_PASSWORD) { $signArgs += @('--key-pass', 'env:HELM_ANDROID_KEY_PASSWORD') }
-    Invoke-Native $Dist $apksigner ($signArgs + @($aligned))
-    Remove-Item $aligned -Force
-    Remove-Item (Join-Path $Dist '*.idsig') -Force -ErrorAction SilentlyContinue
-    Write-Host '  APK signed with HELM_ANDROID_KEYSTORE'
+    if ($apksigner) {
+        Invoke-Native $Dist $apksigner @('verify', $builtApk.FullName)
+        Write-Host '  APK signature verifies'
+    } else {
+        Write-Host '  apksigner not found: APK signature not double-checked' -ForegroundColor Yellow
+    }
+    Copy-Item $builtApk.FullName (Join-Path $Dist 'Helm-android.apk')
 } else {
-    $apkOut = Join-Path $Dist "Helm-$Version-unsigned.apk"
-    Copy-Item $builtApk.FullName $apkOut
-    Write-Host '  No keystore configured: APK is unsigned' -ForegroundColor Yellow
+    Copy-Item $builtApk.FullName (Join-Path $Dist 'Helm-android-unsigned.apk')
+    Write-Host '  No keystore: APK is unsigned (test build)' -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------- 5. installer
@@ -242,7 +276,14 @@ if ($nsisSetup) {
 Copy-Item $agentExe   (Join-Path $Dist 'helm-agent.exe')
 Copy-Item $serviceExe (Join-Path $Dist 'helm-service.exe')
 
-$files = @(Get-ChildItem $Dist -File | Where-Object { $_.Name -ne 'SHA256SUMS' } | Sort-Object Name)
+$files = @(Get-ChildItem $Dist -File | Where-Object { $_.Name -ne 'SHA256SUMS' -and $_.Extension -notin '.sig', '.sha256' } | Sort-Object Name)
+if ($haveKeys) {
+    Write-Stage 'Signing every asset (.sig + .sha256)'
+    foreach ($f in $files) {
+        Invoke-Native $Dist $HelmSign @('sign', $SignKey, $f.FullName)
+        Invoke-Native $Dist $HelmSign @('verify', $expectedPub, $f.FullName)
+    }
+}
 $sums = foreach ($f in $files) {
     $h = (Get-FileHash -Algorithm SHA256 -Path $f.FullName).Hash.ToLowerInvariant()
     "$h  $($f.Name)"

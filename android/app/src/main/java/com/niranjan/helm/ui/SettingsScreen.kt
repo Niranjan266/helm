@@ -57,6 +57,7 @@ fun SettingsScreen(
         }
         NotifyMirrorSettings(settings, onSettings)
         EverydaySettingsSection()
+        UpdateSettingsSection()
         if (pcPrefs != null) {
             SectionCard("This PC on this phone") {
                 ToggleRow("Use the relay when not on the same network", pcPrefs.useRelay) { v -> onPcPrefs { it.copy(useRelay = v) } }

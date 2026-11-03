@@ -414,6 +414,20 @@
     $('#s-approval').checked = s.require_approval;
   }
 
+  function renderUpdate(u) {
+    const busy = u.state === 'checking' || u.state === 'installing';
+    $('#u-summary').textContent = u.summary;
+    $('#u-install').textContent = u.version ? `Update available v${u.version} → Install` : 'Install';
+    $('#u-install').hidden = !u.version;
+    $('#u-install').disabled = busy;
+    $('#u-check').disabled = busy || u.state === 'disabled';
+  }
+
+  async function loadUpdate() {
+    const u = await invoke('get_update').catch(() => null);
+    if (u) renderUpdate(u);
+  }
+
   $('#s-approval').addEventListener('change', async (e) => {
     const want = e.target.checked;
     try {
@@ -477,29 +491,11 @@
       toast('Relay settings saved.');
       loadSettings();
     },
-    'check-updates': async (btn) => {
-      btn.disabled = true;
-      $('#u-summary').textContent = 'Checking…';
-      try {
-        const u = await call('check_updates');
-        $('#u-summary').textContent = u.summary;
-        $('#u-download').hidden = u.state !== 'available';
-      } catch {
-        $('#u-summary').textContent = 'Update check failed.';
-      } finally {
-        btn.disabled = false;
-      }
+    'check-updates': async () => {
+      renderUpdate(await call('check_updates'));
     },
-    'download-update': async (btn) => {
-      btn.disabled = true;
-      $('#u-summary').textContent = 'Downloading and verifying…';
-      try {
-        const path = await call('download_update');
-        $('#u-summary').textContent = `Verified installer saved to ${path}. Run it to update Helm.`;
-      } finally {
-        btn.disabled = false;
-      }
-    },
+    // Errors are shown in the card: loadUpdate after the event from the Rust side.
+    'install-update': () => invoke('install_update').catch(() => loadUpdate()),
     'refresh-activity': () => loadActivity(),
     'open-data': () => call('open_data_dir'),
     quit: () => call('quit_app'),
@@ -514,6 +510,7 @@
     if (kind === 'pairing') loadPairing();
     if (kind === 'code') loadCode();
     if (kind === 'approvals') loadApprovals();
+    if (kind === 'update') loadUpdate();
   });
   listen('helm://navigate', (e) => go(String(e.payload)));
 
@@ -523,7 +520,7 @@
 
   (async () => {
     await loadStatus();
-    await Promise.all([loadPhones(), loadActivity(), loadPairing(), loadSettings(), loadCode(), loadApprovals()]);
+    await Promise.all([loadPhones(), loadActivity(), loadPairing(), loadSettings(), loadCode(), loadApprovals(), loadUpdate()]);
     go(location.hash.slice(1) || 'home');
   })();
 
@@ -546,6 +543,7 @@
       get_pairing: null,
       get_code_pairing: null,
       get_pending_pairings: [],
+      get_update: { state: 'available', summary: 'Helm 0.3.0 is available (you have 0.2.0).', version: '0.3.0', current: '0.2.0' },
       get_activity: [
         { time: new Date(now - 6e4).toISOString(), event: 'auth_ok', device_id: 'a', device_name: 'Pixel 8', peer: '192.168.0.42:5555', detail: '', text: 'Pixel 8 connected' },
         { time: new Date(now - 3e6).toISOString(), event: 'pair_fail', device_id: null, device_name: null, peer: '192.168.0.50:4000', detail: 'bad_token', text: 'Pairing refused (bad token)' },

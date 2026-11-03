@@ -8,9 +8,11 @@
 //!    signature (`<asset>.sig`) against a public key compiled into the
 //!    binary. Only a file that passes both checks is left on disk.
 //!
-//! The release key is compiled in from the `HELM_UPDATE_PUBKEY` environment
-//! variable (64 hex chars) at build time. Without it, [`compiled_public_key`]
-//! is `None` and updates cannot be verified, so they are refused.
+//! The release key (64 hex chars) is compiled in at build time from the
+//! `HELM_UPDATE_PUBKEY` environment variable, or else from the committed
+//! `keys/update-ed25519.pub`. Without one (or with `HELM_UPDATE_PUBKEY=""`),
+//! [`compiled_public_key`] is `None` and updates cannot be verified, so they
+//! are refused.
 
 pub mod fetch;
 pub mod release;
@@ -28,8 +30,11 @@ pub use fetch::HttpFetcher;
 pub use release::{Arch, Asset, Release, UpdateCandidate, parse_releases, select_update};
 pub use version::{Version, VersionError};
 
-/// Hex public key baked in at build time (`HELM_UPDATE_PUBKEY`), if any.
-pub const COMPILED_PUBLIC_KEY_HEX: Option<&str> = option_env!("HELM_UPDATE_PUBKEY");
+/// Hex public key baked in at build time (see `build.rs`), if any.
+pub const COMPILED_PUBLIC_KEY_HEX: Option<&str> = {
+    let key = env!("HELM_UPDATE_RESOLVED_PUBKEY");
+    if key.is_empty() { None } else { Some(key) }
+};
 
 /// Default `owner/repo`, overridable at build time with `HELM_UPDATE_REPO`.
 pub const DEFAULT_REPO: &str = match option_env!("HELM_UPDATE_REPO") {
@@ -136,7 +141,19 @@ pub struct Updater<F: Fetcher> {
 impl<F: Fetcher> Updater<F> {
     /// Uses the compiled-in release key.
     pub fn new(config: UpdateConfig, fetcher: F) -> Result<Self, Error> {
-        let key = compiled_public_key().ok_or(Error::NoPublicKey)?;
+        Self::with_key_hex(config, COMPILED_PUBLIC_KEY_HEX, fetcher)
+    }
+
+    /// Uses a hex key if there is a valid one; otherwise refuses with
+    /// [`Error::NoPublicKey`], so nothing unverifiable can ever be downloaded.
+    pub fn with_key_hex(
+        config: UpdateConfig,
+        hex: Option<&str>,
+        fetcher: F,
+    ) -> Result<Self, Error> {
+        let key = hex
+            .and_then(|h| verify::parse_public_key(h).ok())
+            .ok_or(Error::NoPublicKey)?;
         Ok(Self::with_key(config, key, fetcher))
     }
 
@@ -191,13 +208,14 @@ impl<F: Fetcher> Updater<F> {
         fs::create_dir_all(&self.config.download_dir)?;
         let final_path = self.config.download_dir.join(name);
         let part_path = self.config.download_dir.join(format!("{name}.part"));
+        // A file from an earlier attempt must not survive a failed verification.
+        if final_path.exists() {
+            fs::remove_file(&final_path)?;
+        }
 
         let result = self.download_to(c, &part_path, &expected, &sig);
         match result {
             Ok(()) => {
-                if final_path.exists() {
-                    fs::remove_file(&final_path)?;
-                }
                 fs::rename(&part_path, &final_path)?;
                 Ok(final_path)
             }

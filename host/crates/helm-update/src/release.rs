@@ -52,6 +52,9 @@ pub const SIG_SUFFIX: &str = ".sig";
 /// Suffix of the SHA-256 checksum sidecar (`<asset>.sha256`).
 pub const SHA256_SUFFIX: &str = ".sha256";
 
+/// The NSIS installer of the desktop app, the file the in-app updater runs.
+pub const WINDOWS_SETUP_ASSET: &str = "Helm-windows-x64-setup.exe";
+
 /// A newer release with a verifiable package for this machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateCandidate {
@@ -106,18 +109,28 @@ fn candidate_for(r: &Release, version: Version, arch: Arch) -> Option<UpdateCand
     })
 }
 
-/// Best package asset for `arch`: matching arch token, preferred extension.
+/// Best package asset for `arch`: matching arch token, then our NSIS installer
+/// before any other installer before a bare program (a release also carries the
+/// portable `Helm-windows-x64.exe`, which must not be picked), then extension.
 pub fn pick_package(assets: &[Asset], arch: Arch) -> Option<&Asset> {
     assets
         .iter()
         .filter_map(|a| {
             let lower = a.name.to_ascii_lowercase();
             let (stem, ext) = lower.rsplit_once('.')?;
-            let rank = PACKAGE_EXTENSIONS.iter().position(|e| *e == ext)?;
-            let arch_match = stem
-                .split(['-', '.', ' '])
-                .any(|t| arch.tokens().contains(&t));
-            arch_match.then_some((rank, a))
+            let ext_rank = PACKAGE_EXTENSIONS.iter().position(|e| *e == ext)?;
+            let mut tokens = stem.split(['-', '.', ' ']);
+            if !tokens.clone().any(|t| arch.tokens().contains(&t)) {
+                return None;
+            }
+            let kind_rank = if a.name == WINDOWS_SETUP_ASSET {
+                0
+            } else if tokens.any(|t| t == "setup" || t == "installer") {
+                1
+            } else {
+                2
+            };
+            Some(((kind_rank, ext_rank), a))
         })
         .min_by_key(|(rank, _)| *rank)
         .map(|(_, a)| a)

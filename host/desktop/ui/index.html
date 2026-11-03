@@ -238,11 +238,12 @@
       <div class="card">
         <div class="card-head"><span>Updates</span></div>
         <div class="card-body form">
-          <p id="u-summary" class="muted">Helm never installs updates by itself.</p>
+          <p id="u-summary" class="muted">Helm checks for updates at startup and once a day, and installs only when you ask.</p>
           <div class="inline">
-            <button type="button" class="btn btn-primary" data-action="check-updates">Check for updates</button>
-            <button type="button" class="btn btn-ghost" data-action="download-update" id="u-download" hidden>Download &amp; verify</button>
+            <button type="button" class="btn btn-primary" data-action="install-update" id="u-install" hidden>Install</button>
+            <button type="button" class="btn btn-ghost" data-action="check-updates" id="u-check">Check for updates</button>
           </div>
+          <p class="muted">Every update is verified (SHA-256 and Ed25519 signature) before it runs. Helm restarts in the tray and phones reconnect by themselves.</p>
         </div>
       </div>
 
