@@ -168,7 +168,7 @@ fun RemoteShell(
             ready == null -> null
             ready.viaRelay -> "Relay"
             com.niranjan.helm.core.UsbTether.isOverUsb(ready.endpoint.host, com.niranjan.helm.device.NetIfaces.local()) -> "USB"
-            else -> null
+            else -> "Wi-Fi"
         }
     }
     val scope = rememberCoroutineScope()

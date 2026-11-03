@@ -53,6 +53,75 @@ class Phase3CodecTest {
     }
 
     @Test
+    fun relayAddressNormalisationMatchesTheAgent() {
+        val want = "wss://helm-relay.example.workers.dev"
+        for (typed in listOf(
+            "wss://helm-relay.example.workers.dev",
+            "https://helm-relay.example.workers.dev",
+            "helm-relay.example.workers.dev",
+            "wss://https://helm-relay.example.workers.dev",
+            "https://wss://helm-relay.example.workers.dev/",
+            "HTTPS://helm-relay.example.workers.dev//",
+            "  wss://wss://helm-relay.example.workers.dev  ",
+        )) {
+            assertEquals(typed, want, TunnelProtocol.normalizeRelayUrl(typed))
+        }
+        assertEquals("wss://R.example.com:8443/x", TunnelProtocol.normalizeRelayUrl("WSS://R.example.com:8443/x"))
+        assertEquals("ws://127.0.0.1:9000", TunnelProtocol.normalizeRelayUrl("ws://127.0.0.1:9000"))
+        assertEquals("ws://localhost:8787", TunnelProtocol.normalizeRelayUrl("http://localhost:8787"))
+        assertEquals("ws://[::1]:8787", TunnelProtocol.normalizeRelayUrl("ws://[::1]:8787"))
+        assertEquals("wss://localhost:8787", TunnelProtocol.normalizeRelayUrl("localhost:8787"))
+        assertEquals(TunnelProtocol.DEFAULT_RELAY_URL, TunnelProtocol.normalizeRelayUrl(TunnelProtocol.DEFAULT_RELAY_URL))
+        for (bad in listOf(
+            "", "   ", null, "ws://relay.example.com", "http://relay.example.com", "ws://https://relay.example.com",
+            "ftp://relay.example.com", "wss://", "wss://https://", "https:", "wss://https:", "wss://a.com/?x=1",
+            "wss://u@a.com", "wss://a b", "wss://a.com:99999", "wss://" + "a".repeat(600) + ".com",
+        )) {
+            assertNull(bad, TunnelProtocol.normalizeRelayUrl(bad))
+        }
+    }
+
+    @Test
+    fun anywhereSwitchAndHomeReach() {
+        val pc = SavedPc(hostId, "PC", listOf("10.0.0.2"), 47820, "ab".repeat(32))
+        assertFalse(PcReach.anywhereOn(pc))
+        assertNull("no address yet: ask", PcReach.withAnywhere(pc, true))
+        assertNull("bad address", PcReach.withAnywhere(pc, true, "ftp://x"))
+        val on = PcReach.withAnywhere(pc, true, "wss://https://relay.example.com/")!!
+        assertEquals("wss://relay.example.com", on.relayUrl)
+        assertTrue(PcReach.anywhereOn(on))
+        val off = PcReach.withAnywhere(on, false)!!
+        assertFalse(PcReach.anywhereOn(off))
+        assertEquals("the address stays for next time", on.relayUrl, off.relayUrl)
+        assertNull(EndpointPlanner.relayFor(off))
+        assertTrue(PcReach.anywhereOn(PcReach.withAnywhere(off, true)!!))
+
+        val found = DiscoveredHost(hostId, "PC", "10.0.0.2", 47820, "s")
+        assertEquals(PcLink.CONNECTING, PcReach.of(on, found, connecting = true).link)
+        assertEquals(PcReach(PcLink.WIFI, "Wi-Fi · 10.0.0.2"), PcReach.of(on, found, connecting = false))
+        assertEquals(PcLink.RELAY, PcReach.of(on, null, connecting = false).link)
+        assertEquals(PcLink.SEARCHING, PcReach.of(off, null, connecting = false).link)
+
+        assertEquals("wss://r.example", PcReach.reportedRelay(true, "https://r.example"))
+        assertNull(PcReach.reportedRelay(false, "wss://r.example"))
+    }
+
+    @Test
+    fun relayedStreamsDefaultLowAndHonourPicks() {
+        val p = RelayStreamPolicy
+        assertEquals(StreamChoice(StreamPreset.P1080_30, 10_000), p.choose(false, null, "P1080_30", 0))
+        assertEquals(StreamChoice(StreamPreset.P1080_60, 5_000), p.choose(false, "P1080_60", "P720_30", 5_000))
+        val dflt = p.choose(true, null, "P1080_60", 16_000)
+        assertEquals(StreamChoice(StreamPreset.P720_30, 2_000, loweredForRelay = true), dflt)
+        assertFalse(p.choose(true, "P1080_30", "P720_30", 0).loweredForRelay)
+        assertEquals(StreamPreset.P1080_30, p.choose(true, "P1080_30", "P720_30", 0).preset)
+        val picked = p.choose(true, null, "P1080_30", 0, relayPick = StreamPreset.P1080_30)
+        assertEquals(StreamChoice(StreamPreset.P1080_30, 5_000), picked)
+        assertEquals(StreamChoice(StreamPreset.P720_30, 3_000), p.choose(true, null, "P1080_30", 0, relayKbps = 3_000))
+        assertTrue(p.DEFAULT_KBPS in p.BITRATES)
+    }
+
+    @Test
     fun savedPcRelayAndPrefsAreBackwardCompatible() {
         val old = SavedPcCodec.decode("""[{"host_id":"$hostId","name":"PC","addresses":["10.0.0.2"],"port":47820,"fingerprint":"${"ab".repeat(32)}"}]""").single()
         assertNull(old.relayUrl)

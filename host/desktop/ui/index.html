@@ -72,6 +72,18 @@
       </table>
 
       <div class="card">
+        <div class="card-head"><span>Connect from anywhere</span><span class="relay-state" data-relay-label></span></div>
+        <div class="card-body">
+          <label class="switch-row">
+            <input type="checkbox" data-relay-on>
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>Reach this PC away from home</strong><br><span class="muted" data-relay-text></span></span>
+          </label>
+          <p class="muted">Off by default: relayed traffic counts against the relay owner's Cloudflare quota.</p>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><span>Fig. 2 · Phones</span><a href="#phones" data-page="phones" class="head-link">All phones</a></div>
         <div id="home-phones"></div>
       </div>
@@ -221,15 +233,19 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><span>Relay · use away from home</span><span id="s-relay-state"></span></div>
+        <div class="card-head"><span>Connect from anywhere</span><span class="relay-state" data-relay-label></span></div>
         <div class="card-body form">
-          <label class="check"><input type="checkbox" id="s-relay-on"> Connect through a relay</label>
-          <label for="s-relay-url">Relay URL</label>
+          <label class="switch-row">
+            <input type="checkbox" id="s-relay-on" data-relay-on>
+            <span class="switch" aria-hidden="true"></span>
+            <span><strong>Reach this PC away from home</strong><br><span class="muted" data-relay-text></span></span>
+          </label>
+          <label for="s-relay-url">Relay address</label>
           <div class="inline">
-            <input id="s-relay-url" type="url" placeholder="wss://relay.example.com" spellcheck="false">
+            <input id="s-relay-url" type="text" placeholder="wss://relay.example.com" spellcheck="false" autocomplete="off">
             <button type="button" class="btn btn-ghost" data-action="save-relay">Save</button>
           </div>
-          <p class="muted">Traffic stays end-to-end encrypted; the relay only forwards it.</p>
+          <p class="muted">Off by default: relayed traffic counts against the relay owner's Cloudflare quota. It stays end-to-end encrypted; the relay only forwards it.</p>
         </div>
       </div>
     </section>

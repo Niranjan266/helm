@@ -19,7 +19,7 @@ data class SavedPc(
     @SerialName("last_used_ms") val lastUsedMs: Long = 0,
     /** Wake-on-LAN MACs from `system.info` (best first), `AA:BB:CC:DD:EE:FF`. */
     val macs: List<String> = emptyList(),
-    /** Relay base URL from `system.info.relay` (§12), when the PC has the relay enabled. */
+    /** Relay address from the QR (`r=`), `system.info.relay` or the user (§12). */
     @SerialName("relay_url") val relayUrl: String? = null,
     /** Phone-side settings for this PC (multi-PC, §12). */
     val prefs: PcPrefs = PcPrefs(),
@@ -28,7 +28,7 @@ data class SavedPc(
 /** Per-PC phone settings. */
 @Serializable
 data class PcPrefs(
-    /** Fall back to the relay when the LAN connect fails. */
+    /** "Connect from anywhere": fall back to the relay when the LAN connect fails. */
     @SerialName("use_relay") val useRelay: Boolean = true,
     /** Show Android notifications for this PC's `alert` events. */
     @SerialName("notify_alerts") val notifyAlerts: Boolean = true,
@@ -65,6 +65,37 @@ object SavedPcCodec {
     }
 }
 
+/** How a saved PC can be reached right now, for the Home screen. */
+enum class PcLink { CONNECTING, WIFI, RELAY, SEARCHING }
+
+data class PcReach(val link: PcLink, val text: String) {
+    companion object {
+        fun of(pc: SavedPc, found: DiscoveredHost?, connecting: Boolean): PcReach = when {
+            connecting -> PcReach(PcLink.CONNECTING, "Connecting…")
+            found != null -> PcReach(PcLink.WIFI, "Wi-Fi · ${found.address}")
+            anywhereOn(pc) -> PcReach(PcLink.RELAY, "Relay · from anywhere")
+            else -> PcReach(PcLink.SEARCHING, "Searching the network…")
+        }
+
+        /** The per-PC "Connect from anywhere" switch. */
+        fun anywhereOn(pc: SavedPc): Boolean = pc.prefs.useRelay && !pc.relayUrl.isNullOrBlank()
+
+        /**
+         * [pc] with the switch set. Turning on uses [typedUrl] when given (normalised like the
+         * PC does), else the address already saved. Null = no usable relay address: ask for one.
+         */
+        fun withAnywhere(pc: SavedPc, on: Boolean, typedUrl: String? = null): SavedPc? {
+            if (!on) return pc.copy(prefs = pc.prefs.copy(useRelay = false))
+            val url = TunnelProtocol.normalizeRelayUrl(if (typedUrl.isNullOrBlank()) pc.relayUrl else typedUrl) ?: return null
+            return pc.copy(relayUrl = url, prefs = pc.prefs.copy(useRelay = true))
+        }
+
+        /** The relay address the PC reports (`system.info.relay`), normalised; null when off. */
+        fun reportedRelay(enabled: Boolean, url: String?): String? =
+            if (enabled) TunnelProtocol.normalizeRelayUrl(url) else null
+    }
+}
+
 object EndpointPlanner {
     /** The relay fallback for a saved PC, or null (no relay URL or turned off for this PC). */
     fun relayFor(pc: SavedPc): RelayTransport? =
@@ -95,6 +126,9 @@ object EndpointPlanner {
 
     const val MAX_ADDRESSES = 8
 
+    /** The relay route for a pairing link (`r=`), tried after the LAN addresses. */
+    fun relayForPairing(uri: PairingUri): RelayTransport? = RelayTransport.forPc(uri.relayUrl, uri.hostId)
+
     /** Pairing: the QR addresses in order (LAN first, as the agent lists them). */
     fun forPairing(uri: PairingUri, discovered: DiscoveredHost? = null): List<Endpoint> {
         val out = LinkedHashSet<Endpoint>()
@@ -123,8 +157,10 @@ object EndpointPlanner {
         addresses = uri.addresses,
         port = uri.port,
         fingerprint = uri.fingerprint,
-        lastAddress = ready.endpoint.host,
-        lastPort = ready.endpoint.port,
+        // The dummy inner host of a relay session is not an address to come back to.
+        lastAddress = ready.endpoint.host.takeUnless { ready.viaRelay },
+        lastPort = ready.endpoint.port.takeUnless { ready.viaRelay },
         lastUsedMs = nowMs,
+        relayUrl = uri.relayUrl,
     )
 }

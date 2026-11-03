@@ -329,34 +329,10 @@ async fn relay_tunnel_end_to_end() {
     tx(&mut ws, json!({"type":"in","k":"gy","dx":4,"dy":-3})).await;
     wait_until("gy input", || !fake.ops().is_empty()).await;
 
-    // Pairing is refused over a relayed channel.
-    let mut ws2 = phone_over_relay(&relay, server.fingerprint(), server.host_id()).await;
-    let hello2 = rx(&mut ws2).await;
-    let stranger = Phone::new("Stranger");
-    tx(
-        &mut ws2,
-        stranger.pair_msg(&hello2, &server.new_pairing().token),
-    )
-    .await;
-    let err = rx(&mut ws2).await;
-    assert_eq!(err["type"], "error");
-    assert_eq!(err["code"], "bad_message");
     let audit = std::fs::read_to_string(dir.path().join("audit.log")).unwrap();
     assert!(
         audit.contains("auth_ok") && audit.contains("via=relay ch="),
         "{audit}"
-    );
-    assert!(
-        audit
-            .lines()
-            .any(|l| l.contains("pair_fail") && l.contains("relayed"))
-    );
-    assert!(
-        !server
-            .devices()
-            .unwrap()
-            .iter()
-            .any(|d| d.device_name == "Stranger")
     );
 
     // The relay drops the host: the agent reconnects with backoff (1 s ± jitter).
@@ -378,6 +354,198 @@ async fn relay_tunnel_end_to_end() {
     assert_eq!(r["result"]["enabled"], false);
     wait_until("relay disconnect", || !relay.connected()).await;
     drop(lan);
+    server.shutdown().await;
+}
+
+/// A phone answering `hello` over a fresh relay channel with one `pair` message.
+async fn pair_over_relay(
+    relay: &FakeRelay,
+    server: &helm_agent::ServerHandle,
+    phone: &Phone,
+    token: &str,
+) -> (RelayWs, Value) {
+    let mut ws = phone_over_relay(relay, server.fingerprint(), server.host_id()).await;
+    let hello = rx(&mut ws).await;
+    tx(&mut ws, phone.pair_msg(&hello, token)).await;
+    let reply = rx(&mut ws).await;
+    (ws, reply)
+}
+
+#[tokio::test]
+async fn qr_token_pairs_over_the_relay_and_the_qr_names_the_relay() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay = FakeRelay::start().await;
+    let (server, _) = start_fake_with(dir.path(), |_| {}).await;
+    assert!(
+        !server.new_pairing().uri.contains("&r="),
+        "no relay in the QR while it is off"
+    );
+    server
+        .state()
+        .relay
+        .set(Some(true), Some(&relay.url()))
+        .unwrap();
+    wait_until("relay auth", || relay.connected()).await;
+
+    let pairing = server.new_pairing();
+    let encoded = relay.url().replace(':', "%3A").replace('/', "%2F");
+    assert!(
+        pairing.uri.ends_with(&format!("&r={encoded}")),
+        "{}",
+        pairing.uri
+    );
+
+    let phone = Phone::new("Away");
+    let (ws, reply) = pair_over_relay(&relay, &server, &phone, &pairing.token).await;
+    assert_eq!(reply["type"], "ready", "{reply}");
+    assert_eq!(reply["tier"], "admin");
+    assert!(
+        server
+            .devices()
+            .unwrap()
+            .iter()
+            .any(|d| d.device_name == "Away")
+    );
+    let audit = std::fs::read_to_string(dir.path().join("audit.log")).unwrap();
+    assert!(
+        audit
+            .lines()
+            .any(|l| l.contains("pair_ok") && l.contains("via=relay")),
+        "{audit}"
+    );
+
+    // Single use, over the relay as well.
+    let stranger = Phone::new("Second");
+    let (_ws2, reply) = pair_over_relay(&relay, &server, &stranger, &pairing.token).await;
+    assert_eq!(reply["code"], "bad_token", "{reply}");
+    drop(ws);
+
+    // Turning the relay off takes it out of the next QR.
+    server.state().relay.set(Some(false), None).unwrap();
+    assert!(!server.new_pairing().uri.contains("&r="));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn asking_before_pairing_applies_over_the_relay_and_says_where_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay = FakeRelay::start().await;
+    let (server, fake) = start_fake_with(dir.path(), |_| {}).await;
+    server
+        .state()
+        .relay
+        .set(Some(true), Some(&relay.url()))
+        .unwrap();
+    wait_until("relay auth", || relay.connected()).await;
+    server.state().g4.set_require_approval(true).unwrap();
+    let phone = Phone::new("Away");
+    let token = server.new_pairing().token;
+    let (mut ws, reply) = pair_over_relay(&relay, &server, &phone, &token).await;
+    assert_eq!(reply["type"], "pair_pending", "{reply}");
+    assert!(server.devices().unwrap().is_empty(), "nothing stored yet");
+    wait_until("toast", || !fake.toasts().is_empty()).await;
+    assert!(
+        fake.toasts()[0].body.contains("through the relay"),
+        "{}",
+        fake.toasts()[0].body
+    );
+    assert!(fake.click_toast(0, Some("allow"), None));
+    assert_eq!(rx(&mut ws).await["type"], "ready");
+    assert_eq!(server.devices().unwrap().len(), 1);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn bad_tokens_over_the_relay_hit_the_same_lockout_as_the_lan() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay = FakeRelay::start().await;
+    let (server, _) = start_fake_with(dir.path(), |_| {}).await;
+    server
+        .state()
+        .relay
+        .set(Some(true), Some(&relay.url()))
+        .unwrap();
+    wait_until("relay auth", || relay.connected()).await;
+    let good = server.new_pairing().token;
+    let attacker = Phone::new("Attacker");
+    for _ in 0..helm_agent::pairing::MAX_BAD_TOKENS {
+        let (_ws, reply) = pair_over_relay(&relay, &server, &attacker, "wrong").await;
+        assert_eq!(reply["code"], "bad_token", "{reply}");
+    }
+    // Locked now: not even the right token gets in, whichever path it comes from.
+    let (_ws, reply) = pair_over_relay(&relay, &server, &attacker, &good).await;
+    assert_eq!(reply["code"], "pairing_locked", "{reply}");
+    let mut lan = connect(&server).await;
+    let hello = recv(&mut lan).await;
+    send(&mut lan, Phone::new("Lan").pair_msg(&hello, &good)).await;
+    assert_eq!(recv(&mut lan).await["code"], "pairing_locked");
+    assert!(server.devices().unwrap().is_empty());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn six_digit_code_pairing_stays_refused_over_the_relay() {
+    let dir = tempfile::tempdir().unwrap();
+    let relay = FakeRelay::start().await;
+    let (server, _) = start_fake_with(dir.path(), |_| {}).await;
+    server
+        .state()
+        .relay
+        .set(Some(true), Some(&relay.url()))
+        .unwrap();
+    wait_until("relay auth", || relay.connected()).await;
+    server.new_code_pairing().unwrap();
+    let phone = Phone::new("Code");
+    let mut ws = phone_over_relay(&relay, server.fingerprint(), server.host_id()).await;
+    let hello = rx(&mut ws).await;
+    let nonce = hello["nonce"].as_str().unwrap();
+    tx(
+        &mut ws,
+        json!({
+            "type": "pair_code", "device_id": phone.device_id, "device_name": "Code",
+            "public_key": phone.public_key_b64(),
+            "nonce": helm_agent::util::b64_encode(&[7u8; 32]),
+            "commits": vec![helm_agent::util::b64_encode(&[1u8; 32]); 6],
+            "signature": phone.sign("pair_code", server.host_id(), nonce),
+        }),
+    )
+    .await;
+    let err = rx(&mut ws).await;
+    assert_eq!(err["type"], "error");
+    assert_eq!(err["code"], "bad_message", "{err}");
+    assert!(err["message"].as_str().unwrap().contains("local network"));
+    let audit = std::fs::read_to_string(dir.path().join("audit.log")).unwrap();
+    assert!(
+        audit
+            .lines()
+            .any(|l| l.contains("pair_fail") && l.contains("relayed")),
+        "{audit}"
+    );
+    assert!(server.devices().unwrap().is_empty());
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn relay_status_reports_the_reason_and_recovers() {
+    let dir = tempfile::tempdir().unwrap();
+    let (server, _) = start_fake_with(dir.path(), |_| {}).await;
+    // A port nobody listens on: "not connected", with a reason.
+    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_url = format!("ws://127.0.0.1:{}", dead.local_addr().unwrap().port());
+    drop(dead);
+    let st = server.state().clone();
+    st.relay.set(Some(true), Some(&dead_url)).unwrap();
+    wait_until("relay error", || st.relay.status().last_error.is_some()).await;
+    assert!(!st.relay.status().connected);
+    // A good address clears the error, then connects.
+    let relay = FakeRelay::start().await;
+    st.relay.set(None, Some(&relay.url())).unwrap();
+    wait_until("relay up", || st.relay.status().connected).await;
+    assert_eq!(st.relay.status().last_error, None);
+    // Off: neither connected nor in error.
+    st.relay.set(Some(false), None).unwrap();
+    wait_until("relay off", || !st.relay.status().connected).await;
+    assert_eq!(st.relay.status().last_error, None);
     server.shutdown().await;
 }
 

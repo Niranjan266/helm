@@ -251,8 +251,8 @@ object RelayDns : Dns {
 
 /**
  * Runs the normal pinned TLS + `/ws` (or `/stream`) inside a relay tunnel (§12). [inner] supplies
- * the pinned client; this only swaps in the tunnel socket factory and the dummy DNS. Pairing is
- * never allowed over it ([relayed] = true).
+ * the pinned client; this only swaps in the tunnel socket factory and the dummy DNS. Over it
+ * ([relayed] = true) `auth` and QR-token `pair` are allowed; 6-digit code pairing is not.
  */
 class RelayTransport(
     val connectUrl: String,

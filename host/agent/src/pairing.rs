@@ -116,7 +116,8 @@ impl PairingState {
     }
 }
 
-/// Build the pairing URI exactly as PROTOCOL.md §4 describes.
+/// Build the pairing URI exactly as PROTOCOL.md §4 describes. `relay` adds the optional `r=`
+/// parameter, so the phone can pair and later connect from outside the home network.
 pub fn build_uri(
     host_id: &str,
     host_name: &str,
@@ -124,13 +125,14 @@ pub fn build_uri(
     port: u16,
     fingerprint: &str,
     token: &str,
+    relay: Option<&str>,
 ) -> String {
     let addrs = addresses
         .iter()
         .map(|a| a.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    format!(
+    let mut uri = format!(
         "helm://pair?v=1&id={}&n={}&a={}&p={}&fp={}&t={}",
         util::url_encode(host_id),
         util::url_encode(host_name),
@@ -138,7 +140,12 @@ pub fn build_uri(
         port,
         fingerprint,
         token
-    )
+    );
+    if let Some(r) = relay {
+        uri.push_str("&r=");
+        uri.push_str(&util::url_encode(r));
+    }
+    uri
 }
 
 #[cfg(test)]
@@ -164,6 +171,7 @@ mod tests {
             47820,
             &"ab".repeat(32),
             "tok_-123",
+            None,
         );
         assert_eq!(
             uri,
@@ -173,6 +181,24 @@ mod tests {
                 "ab".repeat(32)
             )
         );
+    }
+
+    #[test]
+    fn uri_carries_the_relay_when_on() {
+        let uri = build_uri(
+            "1b4e28ba-2fa1-11d2-883f-0016d3cca427",
+            "PC",
+            &[],
+            47820,
+            &"ab".repeat(32),
+            "t",
+            Some("wss://relay.example.com"),
+        );
+        assert!(
+            uri.ends_with("&t=t&r=wss%3A%2F%2Frelay.example.com"),
+            "{uri}"
+        );
+        assert!(uri.contains("&a=&p="), "{uri}");
     }
 
     #[test]

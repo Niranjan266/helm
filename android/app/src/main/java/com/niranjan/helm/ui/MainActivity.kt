@@ -134,6 +134,7 @@ class MainActivity : FragmentActivity() {
                         onScan = ::scanQr,
                         onPaste = vm::pairFromText,
                         onPairCode = vm::pairWithCode,
+                        onAnywhere = { pc, on, url -> vm.setAnywhere(pc.hostId, on, url) },
                     )
                 } else {
                     BackHandler { if (screen != Screen.DOCK) screen = Screen.DOCK else vm.disconnect() }
