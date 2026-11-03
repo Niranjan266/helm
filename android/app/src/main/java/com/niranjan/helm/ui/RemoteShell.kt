@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -177,6 +178,10 @@ fun RemoteShell(
     // Landscape touchpad: the touch surface owns the whole screen (no rail); it has its own back button.
     val immersive = landscape && screen == Screen.TOUCHPAD
     var confirmForget by remember { mutableStateOf(false) }
+    // Landscape on the Screen tab is true full screen: no header, rail or bars.
+    val streamVm: StreamViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val streamExited by streamVm.fullscreenExited.collectAsStateWithLifecycle()
+    val fullscreen = screen == Screen.SCREEN && com.niranjan.helm.core.StreamFullscreen.active(landscape, streamExited)
 
     // Latency for the status line: a light system.ping every 15 s while connected.
     val online = state is ConnectionState.Ready
@@ -230,7 +235,7 @@ fun RemoteShell(
             contentColor = c.ink,
             modifier = Modifier.gridPaper(c),
             topBar = {
-                if (!landscape) {
+                if (!landscape && !fullscreen) {
                     ShellTopBar(
                         title = if (screen == Screen.DOCK) session.name else screen.label,
                         status = status,
@@ -242,14 +247,14 @@ fun RemoteShell(
                 }
             },
             bottomBar = {
-                if (!landscape) {
+                if (!landscape && !fullscreen) {
                     ShellNavBar(Screen.entries.filter { it.primary }, screen, go)
                 }
             },
             snackbarHost = { SnackbarHost(snackbar) },
         ) { padding ->
-            Row(Modifier.fillMaxSize().padding(padding)) {
-                if (landscape && !immersive) ShellRail(Screen.entries.filter { it.primary }, screen, go, openDrawer)
+            Row(Modifier.fillMaxSize().padding(if (fullscreen || immersive) PaddingValues() else padding)) {
+                if (landscape && !immersive && !fullscreen) ShellRail(Screen.entries.filter { it.primary }, screen, go, openDrawer)
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     Column(Modifier.fillMaxSize()) {
                         if (reconnect.isReconnecting) {
