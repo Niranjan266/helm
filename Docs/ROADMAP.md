@@ -191,6 +191,16 @@ stream runs at ≥ 720p30; relay logs show no plaintext.
 | D | `scripts/test-all.ps1` (every crate, agent, relay, Android, real E2E), GitHub Actions CI (tests only), `scripts/release.ps1` | `scripts/`, `.github/` |
 | E | After merges: integrate A–C into agent + Android (protocol §14), security review, full test run, real E2E | agent, android |
 
+## Phase 6 — v0.3.0: full-screen control, updates, anywhere by default ◐ (started 2026-11-03)
+
+| Track | Work | Done when |
+|---|---|---|
+| A · Touchpad | Landscape: pad fills the screen, user-chosen right panel (keys, clicks, media, volume, deck, or none; collapsible). Floating keyboard: draggable, resizable, opacity, works over pad and screen. | Panel choice saved per PC; keyboard floats on both screens; gestures unchanged |
+| B · Cursor | Agent maps `mm` to absolute moves so Windows pointer speed and "Enhance pointer precision" no longer distort it; relative stays for games/raw input (auto + setting). Phone: density-independent deltas, every historical touch sample, tremor filter, gentler curve, sub-pixel carry. | Same finger distance gives the same cursor distance across speeds and Windows settings (unit-tested mapping) |
+| C · Full screen | Screen tab in landscape: immersive, no shell or system bars, stream fills the display. Fit/fill toggle, stream size matched to the phone, auto-hiding toolbar, correct touch mapping in every mode. | Laptop screen fills the phone in landscape; direct touch lands on the right pixel |
+| D · Updates | Android and desktop check GitHub, download, verify, install from inside the app. Ed25519 signed releases; proper Android release key (private keys outside the repo). | Update flow tested with fixtures; a tampered file is refused |
+| E · Anywhere | One-tap "Connect from anywhere" on PC and phone, relay address pre-filled and normalised, QR carries the relay so a phone can pair remotely (QR only; token + pinned fingerprint keep it safe). Real test against the deployed relay. | Real E2E through the live relay passes |
+
 ## Release process (all phases)
 - Version per phase: `0.1.x` = Phase 0/1, `0.2` = Phase 2, … `1.0` after Phase 4.
 - GitHub Actions only runs tests (open-source contributors need CI); release builds are made
