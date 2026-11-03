@@ -15,6 +15,7 @@ import com.niranjan.helm.core.HelmConnection
 import com.niranjan.helm.core.HelmException
 import com.niranjan.helm.core.MonitorInfo
 import com.niranjan.helm.core.StreamFrame
+import com.niranjan.helm.core.StreamFullscreen
 import com.niranjan.helm.core.StreamFrameSink
 import com.niranjan.helm.core.StreamPreset
 import com.niranjan.helm.core.StreamRequest
@@ -106,6 +107,56 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Phone screen size in pixels (second-screen stream size). */
     var phoneScreen: Pair<Int, Int> = 0 to 0
+
+    // ---- landscape full screen (not persisted: each visit starts in Fit) ----
+
+    private val _fill = MutableStateFlow(false)
+    /** Fill (edges cropped, pan to reach them) instead of Fit (letterboxed). */
+    val fill: StateFlow<Boolean> = _fill.asStateFlow()
+
+    private val _landscapeLock = MutableStateFlow(false)
+    /** Keep the phone in landscape while on the Screen tab (so it enters full screen). */
+    val landscapeLock: StateFlow<Boolean> = _landscapeLock.asStateFlow()
+
+    private val _fullscreenExited = MutableStateFlow(false)
+    /** The user left full screen during this landscape stint. */
+    val fullscreenExited: StateFlow<Boolean> = _fullscreenExited.asStateFlow()
+
+    /** The phone is currently in landscape (set by the Screen tab before streaming starts). */
+    var displayLandscape = false
+    /** The `max_width x max_height` last sent to the PC. */
+    private var requestedMax: Pair<Int, Int>? = null
+
+    fun setFill(on: Boolean) = _fill.update { on }
+    fun setLandscapeLock(on: Boolean) = _landscapeLock.update { on }
+    fun exitFullscreen() = _fullscreenExited.update { true }
+    fun resetFullscreenExit() = _fullscreenExited.update { false }
+
+    /** The phone's display changed (rotation): remember its size and re-request a fitting stream. */
+    fun onDisplay(landscape: Boolean, widthPx: Int, heightPx: Int) {
+        displayLandscape = landscape
+        phoneScreen = widthPx to heightPx
+        if (session != null && desiredMax() != requestedMax) restart.tryEmit("rotate")
+    }
+
+    private fun currentPreset(): StreamPreset =
+        StreamPreset.byName(controller.prefsFor(controller.session.value?.hostId).streamPreset ?: settings.value.streamPreset)
+
+    /** Stream size box for the current display, or null to use the preset's own limits. */
+    private fun desiredMax(): Pair<Int, Int>? {
+        val m = _ui.value.monitor
+        val phone = phoneScreen
+        if (_g3.value.secondScreen && m != null && phone.first > 0) {
+            return SecondScreen.mirrorSize(m.width, m.height, phone.first, phone.second)
+        }
+        if (!displayLandscape || phone.first <= 0) return null
+        val preset = currentPreset()
+        val info = _ui.value.info
+        val onMonitor = _g3.value.window == null
+        val pcW = if (onMonitor) m?.width ?: info?.width else info?.width
+        val pcH = if (onMonitor) m?.height ?: info?.height else info?.height
+        return StreamFullscreen.streamBox(phone.first, phone.second, preset.maxWidth, preset.maxHeight, pcW, pcH)
+    }
 
     private val _cursor = MutableStateFlow<CursorPos?>(null)
     val cursor: StateFlow<CursorPos?> = _cursor.asStateFlow()
@@ -271,8 +322,7 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun request(): StreamRequest {
         val st = settings.value
-        val perPc = controller.prefsFor(controller.session.value?.hostId).streamPreset
-        val preset = StreamPreset.byName(perPc ?: st.streamPreset)
+        val preset = currentPreset()
         val g = _g3.value
         val g3 = control?.supportsG3 == true
         val m = _ui.value.monitor
@@ -283,11 +333,7 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
             monitorId = m?.id,
             hwnd = g.window?.hwnd,
             gaming = if (g3) g.gaming else null,
-            maxSize = if (g.secondScreen && m != null && phoneScreen.first > 0) {
-                SecondScreen.mirrorSize(m.width, m.height, phoneScreen.first, phoneScreen.second)
-            } else {
-                null
-            },
+            maxSize = desiredMax().also { requestedMax = it },
         )
     }
 

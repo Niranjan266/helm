@@ -1,5 +1,7 @@
 package com.niranjan.helm.core
 
+import kotlin.math.abs
+
 /** A rectangle in view pixels. */
 data class ViewRect(val left: Float, val top: Float, val width: Float, val height: Float) {
     val right: Float get() = left + width
@@ -23,11 +25,34 @@ data class ViewTransform(
     val panX: Float = 0f,
     val panY: Float = 0f,
     val maxZoom: Float = 5f,
+    /** Fill: scale so the image covers the whole view (edges cropped, pan to reach them). */
+    val fill: Boolean = false,
 ) {
     val isValid: Boolean get() = viewWidth > 0 && viewHeight > 0 && contentWidth > 0 && contentHeight > 0
 
+    /** View pixels per stream pixel at zoom 1: letterboxed (Fit) or covering (Fill). */
     private val fitScale: Float
-        get() = if (!isValid) 0f else minOf(viewWidth / contentWidth, viewHeight / contentHeight)
+        get() = when {
+            !isValid -> 0f
+            fill -> maxOf(viewWidth / contentWidth, viewHeight / contentHeight)
+            else -> minOf(viewWidth / contentWidth, viewHeight / contentHeight)
+        }
+
+    /**
+     * True when Fit and Fill actually differ: the view and stream aspect ratios differ by more
+     * than [ASPECT_TOLERANCE]. Below that the bars are negligible and Fit is used as is.
+     */
+    val fillUseful: Boolean
+        get() {
+            if (!isValid) return false
+            val a = viewWidth / viewHeight
+            val b = contentWidth / contentHeight
+            return abs(a / b - 1f) > ASPECT_TOLERANCE
+        }
+
+    /** The image is larger than the view on some axis (zoomed, or Fill), so panning does something. */
+    val canPan: Boolean
+        get() = isValid && (contentWidth * scale > viewWidth + 1f || contentHeight * scale > viewHeight + 1f)
 
     /** View pixels per stream pixel. */
     val scale: Float get() = fitScale * zoom
@@ -100,9 +125,22 @@ data class ViewTransform(
 
     fun reset(): ViewTransform = copy(zoom = 1f, panX = 0f, panY = 0f)
 
-    private companion object {
+    /** Switches Fit / Fill; zoom and pan start over, centred. */
+    fun withFill(fill: Boolean): ViewTransform =
+        if (fill == this.fill) this else copy(fill = fill, zoom = 1f, panX = 0f, panY = 0f)
+
+    /** Stream pixel under view point ([x], [y]) (not clamped; for tests and hit maths). */
+    fun toStream(x: Float, y: Float): Pair<Float, Float> {
+        val r = contentRect
+        return (x - r.left) / scale to (y - r.top) / scale
+    }
+
+    companion object {
         /** Float slack at the image edges (touches exactly on the border still count). */
-        const val EDGE = 1e-4f
+        private const val EDGE = 1e-4f
+
+        /** Aspect ratios closer than this (relative) are treated as equal. */
+        const val ASPECT_TOLERANCE = 0.02f
     }
 
     private fun clamped(): ViewTransform {
