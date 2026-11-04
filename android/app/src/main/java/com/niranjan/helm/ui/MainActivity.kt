@@ -97,6 +97,7 @@ class MainActivity : FragmentActivity() {
                 val reconnect by vm.reconnect.collectAsStateWithLifecycle()
                 val snackbar = remember { SnackbarHostState() }
                 var screen by rememberSaveable { mutableStateOf(Screen.DOCK) }
+                var bluetoothOpen by rememberSaveable { mutableStateOf(false) }
 
                 LaunchedEffect(Unit) {
                     launch { vm.messages.collect { snackbar.showSnackbar(it) } }
@@ -117,6 +118,8 @@ class MainActivity : FragmentActivity() {
                 if (locked) {
                     BackHandler { moveTaskToBack(true) }
                     LockScreen(onUnlock = appLock::unlock)
+                } else if (bluetoothOpen) {
+                    BluetoothScreen(settings = settings, onExit = { bluetoothOpen = false })
                 } else if (s == null || (s.quiet && state !is ConnectionState.Ready)) {
                     HomeScreen(
                         saved = saved,
@@ -135,6 +138,7 @@ class MainActivity : FragmentActivity() {
                         onPaste = vm::pairFromText,
                         onPairCode = vm::pairWithCode,
                         onAnywhere = { pc, on, url -> vm.setAnywhere(pc.hostId, on, url) },
+                        onBluetooth = { bluetoothOpen = true },
                     )
                 } else {
                     BackHandler { if (screen != Screen.DOCK) screen = Screen.DOCK else vm.disconnect() }

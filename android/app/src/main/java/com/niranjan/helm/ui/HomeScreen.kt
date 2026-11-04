@@ -63,6 +63,8 @@ fun HomeScreen(
     onPairCode: (DiscoveredHost, String) -> String? = { _, _ -> "Code pairing is not available." },
     /** "Connect from anywhere" for one PC, with a typed address when asked. Returns an error or null. */
     onAnywhere: (SavedPc, Boolean, String?) -> String? = { _, _, _ -> null },
+    /** Bluetooth mode: the phone as a plain Bluetooth mouse and keyboard, no Helm on the PC. */
+    onBluetooth: () -> Unit = {},
 ) {
     val c = Bp.c
     var nearbyInfo by remember { mutableStateOf<DiscoveredHost?>(null) }
@@ -170,6 +172,10 @@ fun HomeScreen(
                     textStyle = BpType.button.copy(fontWeight = FontWeight.Black, fontSize = 17.sp),
                     modifier = Modifier.fillMaxWidth().height(63.dp),
                 ) { Text("PAIR WITH QR") }
+                OutlineButton(
+                    onClick = onBluetooth,
+                    modifier = Modifier.fillMaxWidth().height(48.dp).padding(top = 8.dp),
+                ) { Text("BLUETOOTH · MOUSE & KEYBOARD") }
                 TextButton(onClick = { showPaste = true }) {
                     MonoLabel("Paste pairing link", color = c.pencilInk, strong = true)
                 }
