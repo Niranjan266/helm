@@ -54,6 +54,7 @@ struct Inner {
     identity: Option<IdentityInfo>,
     guard: Option<InstanceGuard>,
     pump: Option<tauri::async_runtime::JoinHandle<()>>,
+    phone_pump: Option<tauri::async_runtime::JoinHandle<()>>,
     state: Option<Arc<AppState>>,
 }
 
@@ -155,6 +156,7 @@ impl Controller {
                 identity: None,
                 guard: None,
                 pump: None,
+                phone_pump: None,
                 state: None,
             }),
         }
@@ -164,7 +166,7 @@ impl Controller {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn agent(&self) -> Option<Arc<AppState>> {
+    pub(crate) fn agent(&self) -> Option<Arc<AppState>> {
         self.lock().state.clone()
     }
 
@@ -225,6 +227,10 @@ impl Controller {
                 let audit = handle.state().audit.subscribe();
                 let host = handle.state().g4.subscribe();
                 let pump = tauri::async_runtime::spawn(pump(self.clone(), events, audit, host));
+                let phone_pump = tauri::async_runtime::spawn(crate::phone::pump_events(
+                    self.app.clone(),
+                    handle.state().clone(),
+                ));
                 {
                     let mut inner = self.lock();
                     inner.state = Some(handle.state().clone());
@@ -236,6 +242,7 @@ impl Controller {
                     inner.started = Some(Instant::now());
                     inner.conns.clear();
                     inner.pump = Some(pump);
+                    inner.phone_pump = Some(phone_pump);
                 }
                 tracing::info!("agent running on port {}", handle.port());
                 *server = Some(handle);
@@ -262,6 +269,9 @@ impl Controller {
         {
             let mut inner = self.lock();
             if let Some(p) = inner.pump.take() {
+                p.abort();
+            }
+            if let Some(p) = inner.phone_pump.take() {
                 p.abort();
             }
             inner.state = None;

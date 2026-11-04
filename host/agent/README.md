@@ -13,6 +13,10 @@ the `/stream` socket (`cargo test --test g3 -- --nocapture` prints the latency c
 Phase 4 (`p4`): relay tunnel for access from anywhere, `relay.get`/`relay.set`, `wol.send`,
 gyro air mouse (`gy` input). Phase 5: signed update check, clean start under `helm-service`.
 The wire contract is [`Docs/PROTOCOL.md`](../../Docs/PROTOCOL.md).
+G9 (`g9`, [`Docs/protocol/phone-control.md`](../../Docs/protocol/phone-control.md)): the other way
+round, the PC views and controls a phone with its owner's consent. `phone.*` methods, phone → PC
+H.264 and PC → phone input on `/stream`, and a lib API for the desktop app (`AppState::phone`,
+`src/phone/`); `tests/phone.rs` plays the phone. Session start and stop go to `audit.log`.
 G5 (`g5`): dock folders, deck pages and button sizes, app usage stats (`apps.usage`, from
 launches and the foreground watcher, `usage.json`) and custom icons (`deck.icon.put/get`,
 `deck-icons\`) — see [`Docs/protocol/dock-deck-2.md`](../../Docs/protocol/dock-deck-2.md).

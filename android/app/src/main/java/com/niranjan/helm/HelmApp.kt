@@ -68,6 +68,7 @@ class HelmApp : Application() {
         controller = HelmController(this)
         com.niranjan.helm.device.HelmBackground(this, controller).start()
         com.niranjan.helm.device.EverydayBackground.start(this, controller)
+        com.niranjan.helm.device.PhoneBridge.start(this, controller)
     }
 }
 

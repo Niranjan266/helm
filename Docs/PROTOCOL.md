@@ -261,6 +261,8 @@ Deck `action` = one of `{"hotkey":"ctrl+shift+esc"}`, `{"text":"…"}`, `{"launc
 - Stream keyframes may exceed 1 MiB: `/stream` binary frames are allowed up to 16 MiB.
 - Feature `g3` (window thumbnails, gaming preset, input on `/stream`, second screen):
   [protocol/streaming-2.md](protocol/streaming-2.md).
+- Feature `g9` (the PC views and controls the phone, with the phone's consent, same frame layout):
+  [protocol/phone-control.md](protocol/phone-control.md).
 
 ## 11. Phase 3 — power user (feature `p3`)
 

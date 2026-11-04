@@ -5,8 +5,12 @@ running the Helm agent **in-process** through the `helm-agent` library (`../agen
 window only hides it, so phones stay connected; **Quit Helm** in the tray stops the agent cleanly.
 
 - Pages: Home (status, details, phones, pairing QR with countdown, log), Phones (access level,
-  revoke), Pair, Activity (`audit.log`), Settings (Start with Windows, port, pause, relay /
-  Connect from anywhere, updates).
+  revoke), Phone (see and control a connected phone, with its owner's consent), Pair, Activity
+  (`audit.log`), Settings (Start with Windows, port, pause, relay / Connect from anywhere, updates).
+- Phone page (`src/phone.rs`, `ui/phone.js`, `ui/phone-core.js`;
+  [Docs/protocol/phone-control.md](../../Docs/protocol/phone-control.md)): frames arrive over a Tauri
+  binary channel (at most 4 unacknowledged) and are decoded with WebCodecs onto a canvas. `node --test
+  tests/phone-core.test.mjs` tests the pure logic; `cargo test` runs that too when Node is installed.
 - Updates (`src/updater.rs`): checks GitHub Releases at startup and daily; "Update available vX →
   Install" in Settings and the tray. Install downloads `Helm-windows-x64-setup.exe` through
   `helm-update` (HTTPS, size, SHA-256, Ed25519; a bad file is refused and deleted), runs it
