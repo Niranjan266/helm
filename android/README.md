@@ -53,6 +53,22 @@ Ctrl/Alt/Shift/Win with double-tap lock, opacity, remembered position) that any 
 Pointer maths (`core/PointerMotion.kt`): dp-based deltas, every historical sample, tremor filter,
 gentle gain curve, sub-pixel carry; layout/placement maths in `core/PadLayout.kt` (`G8PointerTest`, `G8PadTest`).
 
+Bluetooth mode (no Wi-Fi, no Helm on the PC): "Bluetooth" on the Home screen turns the phone into a
+standard Bluetooth HID mouse + keyboard (`BluetoothHidDevice`, Android 9 / API 28+; a phone without the
+HID Device profile just gets a plain message). Setup asks for BLUETOOTH_CONNECT / BLUETOOTH_ADVERTISE
+(Android 12+; legacy BLUETOOTH / BLUETOOTH_ADMIN up to 11), turns Bluetooth on, registers the HID app,
+makes the phone discoverable, lists bonded PCs and reconnects to the last one. On Windows: Settings ->
+Bluetooth & devices -> Add device -> Bluetooth, pick the phone. The control screen reuses the Wi-Fi
+touchpad's gestures and pointer maths (`TouchSurface`, `PointerPipeline`, through the small
+`core/TouchPadSink.kt` interface), the floating keyboard, key panel and type box, plus a media row
+(play/pause, next, previous, volume, mute). Text is mapped to a US layout; characters with no key are
+skipped and counted, and what the PC types depends on its own keyboard language. Keys and buttons are
+released on leaving, disconnecting and when the app goes to the background; the HID app is unregistered
+on exit. Plain Kotlin in `core/`: `HidDescriptor.kt` (report ids 1 mouse, 2 keyboard, 3 consumer),
+`HidReports.kt` (report builders, delta clamping), `HidKeys.kt` (VK and char -> usage),
+`BtInputBridge.kt` (rate-limited report sending), `BtHid.kt` (support and permission rules, transport
+interface); Android side in `device/AndroidBtHid.kt` and `ui/BluetoothScreen.kt` (`BtHidTest`).
+
 In-app updates: Settings shows the version and "Check for updates"; a banner on the PC list and
 the Dock shows when a newer release exists (background check at most daily, when the app comes to
 the foreground). Install downloads `Helm-android.apk` from GitHub Releases with progress, checks

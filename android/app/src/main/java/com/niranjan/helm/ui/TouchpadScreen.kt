@@ -25,6 +25,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.niranjan.helm.core.PadPanel
+import com.niranjan.helm.core.TouchPadSink
 import com.niranjan.helm.core.PointerPipeline
 import com.niranjan.helm.core.PointerSample
 import com.niranjan.helm.device.PadStore
@@ -91,6 +92,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niranjan.helm.core.InputFrame
 import com.niranjan.helm.core.KeyPress
 import com.niranjan.helm.core.MouseButton
 import com.niranjan.helm.core.TextDiff
@@ -107,6 +109,16 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+
+/** The Wi-Fi PC connection seen through the small interface the touch surface needs. */
+private class RemoteSink(private val remote: RemoteViewModel) : TouchPadSink {
+    override fun touchMove(dx: Float, dy: Float) = remote.touchMove(dx, dy)
+    override fun touchScroll(dx: Float, dy: Float) = remote.touchScroll(dx, dy)
+    override fun flushInput() = remote.flushInput()
+    override fun sendAll(frames: List<InputFrame>) = remote.sendAll(frames)
+    override fun click(button: MouseButton) = remote.click(button)
+    override fun pinch(start: Boolean) = remote.pinch(start)
+}
 
 private enum class TwoFinger { NONE, SCROLL, PINCH, SWIPE }
 
@@ -142,6 +154,7 @@ fun TouchpadScreen(
             remote.gyroReset()
         }
     }
+    val sink = remember(remote) { RemoteSink(remote) }
     val mods = remember { mutableStateListOf<Int>() }
     var autoShown by remember { mutableStateOf(false) }
     val rui by remote.ui.collectAsStateWithLifecycle()
@@ -250,19 +263,19 @@ fun TouchpadScreen(
     val pad = @Composable { modifier: Modifier ->
         Column(modifier, verticalArrangement = Arrangement.spacedBy(ControlGap)) {
             TouchSurface(
-                remote = remote,
+                remote = sink,
                 speed = speed,
                 haptics = settings.haptics,
                 gestures = gestures,
                 onLeftTap = { dragLock = remote.isDragLocked },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
-            ClickButtons(remote)
+            ClickButtons(sink)
         }
     }
     val keys = @Composable {
         KeyPanel(mods = mods, onKey = ::press)
-        TypeField(remote = remote, mods = mods, focus = focus, onKey = ::press)
+        TypeField(remote = sink, mods = mods, focus = focus, onKey = ::press)
     }
 
     if (optionsDialog) {
@@ -285,7 +298,7 @@ fun TouchpadScreen(
             val c = Bp.c
             Box(Modifier.fillMaxSize()) {
                 TouchSurface(
-                    remote = remote,
+                    remote = sink,
                     speed = speed,
                     haptics = settings.haptics,
                     gestures = gestures,
@@ -310,7 +323,7 @@ fun TouchpadScreen(
                         MonoChip("Type", onClick = { typeOpen = !typeOpen }, selected = typeOpen, height = 36.dp)
                     }
                     if (typeOpen) {
-                        Box(Modifier.width(380.dp)) { TypeField(remote = remote, mods = mods, focus = focus, onKey = ::press) }
+                        Box(Modifier.width(380.dp)) { TypeField(remote = sink, mods = mods, focus = focus, onKey = ::press) }
                     }
                 }
                 PadSidePanel(
@@ -398,8 +411,8 @@ private fun PadToolbar(
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-private fun TouchSurface(
-    remote: RemoteViewModel,
+internal fun TouchSurface(
+    remote: TouchPadSink,
     speed: Float,
     haptics: Boolean,
     gestures: GestureSettings = GestureSettings(),
@@ -566,7 +579,7 @@ private fun TouchSurface(
 }
 
 @Composable
-private fun ClickButtons(remote: RemoteViewModel) {
+internal fun ClickButtons(remote: TouchPadSink) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ControlGap)) {
         OutlineButton(
             onClick = { remote.click(MouseButton.LEFT) },
@@ -583,7 +596,7 @@ private fun ClickButtons(remote: RemoteViewModel) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun KeyPanel(mods: SnapshotStateList<Int>, onKey: (Int) -> Unit) {
+internal fun KeyPanel(mods: SnapshotStateList<Int>, onKey: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // Modifiers stick until the next key, then clear.
@@ -611,8 +624,8 @@ private fun KeyRow(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun TypeField(
-    remote: RemoteViewModel,
+internal fun TypeField(
+    remote: TouchPadSink,
     mods: SnapshotStateList<Int>,
     focus: FocusRequester,
     onKey: (Int) -> Unit,

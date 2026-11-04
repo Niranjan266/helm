@@ -15,6 +15,13 @@
     <!-- Everyday (g6): "Find my phone" vibrates and opens a full-screen alarm. -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Bluetooth mode (phone as a Bluetooth mouse and keyboard): runtime permissions on Android 12+,
+         the legacy ones on Android 11 and older. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <!-- In-app updates: installs only a downloaded APK that passed SHA-256 + Ed25519 checks. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
