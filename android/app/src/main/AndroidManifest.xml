@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- g9 "Let PC see this phone": screen capture service, and no overlays on its consent screen. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />
     <!-- Everyday (g6): "Find my phone" vibrates and opens a full-screen alarm. -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
@@ -147,6 +150,34 @@
         <receiver
             android:name=".device.RingStopReceiver"
             android:exported="false" />
+
+        <!-- g9: the PC views and controls this phone. Each session is accepted on this screen and
+             in Android's prompt; the capture service runs only for that session. -->
+        <activity
+            android:name=".ui.PhoneConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.niranjan.helm.phone"
+            android:theme="@style/Theme.Helm" />
+
+        <service
+            android:name=".device.PhoneScreenService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".device.PhoneAccessService"
+            android:exported="false"
+            android:label="@string/phone_access_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/phone_access_service" />
+        </service>
 
         <!-- Everyday (g6): shares clipboard-history images from the app cache. -->
         <provider

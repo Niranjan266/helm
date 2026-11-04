@@ -6,13 +6,14 @@
   const invoke = tauri ? tauri.core.invoke : previewInvoke;
   const listen = tauri ? tauri.event.listen : async () => () => {};
 
-  const PAGES = ['home', 'phones', 'pair', 'activity', 'settings'];
+  const PAGES = ['home', 'phones', 'phone', 'pair', 'activity', 'settings'];
   const SHEETS = {
     home: 'Sheet 01 · This PC',
     phones: 'Sheet 02 · Phones',
     pair: 'Sheet 03 · Pairing',
     activity: 'Sheet 04 · Activity',
     settings: 'Sheet 05 · Settings',
+    phone: 'Sheet 06 · See a phone',
   };
   const FAIL_EVENTS = new Set(['pair_fail', 'auth_fail', 'handshake_timeout', 'relay_down']);
 
@@ -108,6 +109,7 @@
     if (page === 'settings') loadSettings();
     if (page === 'pair' || page === 'home') loadPairing();
     if (page === 'pair') loadCode();
+    if (page === 'phone' && window.HelmPhone) window.HelmPhone.onShow();
   }
 
   document.addEventListener('click', (e) => {

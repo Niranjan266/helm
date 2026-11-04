@@ -79,6 +79,8 @@ pub struct Config {
     pub wifi_poll: Duration,
     /// g4: how long a pairing waits for Allow / Deny on the PC (60 s; tests shorten it).
     pub approval_timeout: Duration,
+    /// g9: how long a phone has to answer a view / control request (tests shorten it).
+    pub phone_request_timeout: Duration,
 }
 
 impl Config {
@@ -102,6 +104,7 @@ impl Config {
             trigger_tick: crate::p5::TRIGGER_TICK,
             wifi_poll: crate::p5::WIFI_POLL,
             approval_timeout: crate::g4::approval::APPROVAL_TIMEOUT,
+            phone_request_timeout: crate::phone::REQUEST_TIMEOUT,
         }
     }
 }
@@ -166,6 +169,8 @@ pub struct AppState {
     pub g5: crate::g5::G5State,
     /// g8: `pointer_mode` (Docs/protocol/pointer.md).
     pub pointer: Arc<crate::pointer::PointerSettings>,
+    /// g9: the PC views and controls a phone (Docs/protocol/phone-control.md).
+    pub phone: crate::phone::PhoneHub,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -234,6 +239,10 @@ impl AppState {
             g6: crate::g6::G6State::new(&config.data_dir),
             g5: crate::g5::G5State::new(&config.data_dir),
             pointer: Arc::new(crate::pointer::PointerSettings::load(&config.data_dir)),
+            phone: crate::phone::PhoneHub::new(
+                config.phone_request_timeout,
+                config.stream_token_lifetime,
+            ),
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
@@ -1099,6 +1108,7 @@ async fn run_session<S>(
     });
     crate::p5::session_ended(&state, session_id, &device_id).await;
     state.platform.presenter().session_ended(session_id);
+    state.phone.on_session_closed(&state, session_id);
     session.finish().await;
     if !writer_done {
         let _ = tx.send(Outgoing::Close(CloseCode::Normal, ""));

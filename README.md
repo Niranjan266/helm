@@ -38,6 +38,7 @@ Android app ──(mDNS: _helm._tcp)──▶ finds PC
 | `android` | Android app (Kotlin + Jetpack Compose) — see its README |
 | `Docs/PLAN.md` | Research, full feature list, architecture and roadmap |
 | `Docs/PROTOCOL.md` | Phone ↔ PC protocol |
+| `Docs/protocol/phone-control.md` | The other way round: see and control the phone from the PC, with its owner's consent |
 
 ## Install
 

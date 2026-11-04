@@ -68,6 +68,23 @@ pub fn describe(event: &str, name: Option<&str>, detail: &str) -> String {
         "relay_down" => "Relay disconnected".into(),
         "relay_set" => "Relay settings changed".into(),
         "power_run" => format!("Scheduled power action: {detail}"),
+        "phone_request" => format!("Asked {who} to share its screen"),
+        "phone_session_start" => {
+            let control = detail.split_whitespace().any(|p| p == "control=true");
+            if control {
+                format!("Started controlling {who}")
+            } else {
+                format!("Started viewing {who} (view only)")
+            }
+        }
+        "phone_session_stop" => match detail.split_whitespace().find_map(|p| p.strip_prefix("reason=")) {
+            Some(r) => format!("Stopped viewing {who} ({})", reason(r)),
+            None => format!("Stopped viewing {who}"),
+        },
+        "phone_request_end" => match detail.split_whitespace().find_map(|p| p.strip_prefix("reason=")) {
+            Some(r) => format!("{who} did not share its screen ({})", reason(r)),
+            None => format!("{who} did not share its screen"),
+        },
         other if detail.is_empty() => reason(other),
         other => format!("{} ({detail})", reason(other)),
     }
@@ -85,6 +102,27 @@ pub fn parse_lines(lines: &[String], names: &HashMap<String, String>) -> Vec<Ent
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_sessions_read_as_sentences() {
+        let n = Some("Pixel 8");
+        assert_eq!(
+            describe("phone_session_start", n, "id=1 control=true relayed=false size=720x1600"),
+            "Started controlling Pixel 8"
+        );
+        assert_eq!(
+            describe("phone_session_start", n, "id=1 control=false relayed=false size=720x1600"),
+            "Started viewing Pixel 8 (view only)"
+        );
+        assert_eq!(
+            describe("phone_session_stop", n, "id=1 reason=screen_locked secs=12"),
+            "Stopped viewing Pixel 8 (screen locked)"
+        );
+        assert_eq!(
+            describe("phone_request_end", n, "id=1 reason=declined"),
+            "Pixel 8 did not share its screen (declined)"
+        );
+    }
 
     fn names() -> HashMap<String, String> {
         HashMap::from([("dev1".to_string(), "Pixel 8".to_string())])
