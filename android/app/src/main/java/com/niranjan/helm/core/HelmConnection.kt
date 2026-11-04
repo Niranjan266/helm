@@ -681,6 +681,16 @@ class HelmConnection(
         return ws.send(frame.encode().toByteString())
     }
 
+    /** g9: one raw binary frame (the phone's screen, Docs/protocol/phone-control.md). */
+    fun sendBytes(bytes: ByteArray): Boolean {
+        val ws = socket ?: return false
+        if (_state.value !is ConnectionState.Ready) return false
+        return ws.send(bytes.toByteString())
+    }
+
+    /** g9: bytes OkHttp has not written to the network yet. */
+    val queuedBytes: Long get() = socket?.queueSize() ?: 0L
+
     /** Waits until fewer than [limit] bytes are queued (OkHttp closes the socket past 16 MiB). */
     suspend fun awaitQueueBelow(limit: Long) {
         while (true) {

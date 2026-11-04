@@ -33,6 +33,8 @@ pub mod present;
 pub mod pointer;
 // G5: dock folders, smart order, deck pages, icons
 pub mod g5;
+// g9: the PC views and controls the phone (Docs/protocol/phone-control.md)
+pub mod phone_control;
 
 /// All modules shipped in this build.
 pub fn all() -> Vec<Arc<dyn Module>> {
@@ -58,6 +60,7 @@ pub fn all() -> Vec<Arc<dyn Module>> {
         Arc::new(present::PresentModule),
         Arc::new(g5::G5Module),
         Arc::new(pointer::PointerModule),
+        Arc::new(phone_control::PhoneControlModule),
     ]
 }
 

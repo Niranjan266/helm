@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="phone_access_label">Helm: let PC tap and type</string>
+    <string name="phone_access_summary">Lets a PC you accepted tap and type on this phone.</string>
+    <string name="phone_access_description">During a session you accepted in Helm, this performs what the PC sends: taps, swipes, Back, Home and typing. Helm does not read, store or send screen text or accessibility events. Without this service, sessions are view only. Each session needs your consent, and you can stop it at any time from the notification.</string>
+</resources>

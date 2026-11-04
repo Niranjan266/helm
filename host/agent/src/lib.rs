@@ -36,6 +36,7 @@ pub mod p3;
 pub mod p5;
 pub mod pairing;
 pub mod paths;
+pub mod phone;
 pub mod platform;
 pub mod pointer;
 pub mod present;

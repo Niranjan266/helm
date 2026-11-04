@@ -31,6 +31,14 @@ automatically, built-in stroke icons, or a picture uploaded to the PC).
 Every p3/p4/p5 call is gated on the hello feature. The wire contract is
 [`Docs/PROTOCOL.md`](../Docs/PROTOCOL.md).
 
+Let PC see this phone (g9, [`Docs/protocol/phone-control.md`](../Docs/protocol/phone-control.md)):
+off by default (menu, "Let PC see this phone"). A request from a paired PC opens a consent screen and
+then Android's capture prompt, every time; nothing is remembered. `device/PhoneScreenService`
+(foreground service type `mediaProjection`, H.264 surface encoder), `device/PhoneAccessService`
+(optional accessibility service for gestures, Back / Home / Recents / Notifications and text; it reads
+no screen text or events), `core/PhoneControl.kt` (the rules and plans; `PhoneControlTest`,
+`PhoneLinkTest`). Stops on Stop, screen lock, disconnect and 10 minutes without PC input.
+
 Everyday (g6, [`Docs/protocol/everyday.md`](../Docs/protocol/everyday.md)): Clipboard history
 (list, on/off + encrypted persist, copy to phone / share / copy on PC, delete, clear; refreshes
 on `clipboard.history.changed`), quick file drop (files shared to Helm get a progress

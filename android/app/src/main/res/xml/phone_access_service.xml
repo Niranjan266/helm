@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Helm performs PC input during a session the phone's owner accepted. Events are not used
+     (the handler is empty); window content is needed only to find the focused field. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAnnouncement"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/phone_access_description"
+    android:isAccessibilityTool="false"
+    android:notificationTimeout="1000"
+    android:summary="@string/phone_access_summary" />
