@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -113,6 +114,7 @@ enum class Screen(val label: String, val icon: ImageVector, val primary: Boolean
     FIND_PHONE("Ring another phone", Icons.Filled.Notifications, false, g6 = true),
     PRESENT("Presentation", Icons.Filled.Face, false, g2 = true),
     FILES("Files & sharing", Icons.Filled.Share, false),
+    PHONE_ACCESS("Let PC see this phone", Icons.Filled.Phone, false),
     SECURITY("Devices & security", Icons.Filled.Lock, false),
     SETTINGS("Settings", Icons.Filled.Settings, false),
 }
@@ -311,6 +313,7 @@ private fun ScreenContent(
         Screen.CLIPBOARD_HISTORY -> ClipboardHistoryScreen()
         Screen.SCHEDULES -> SchedulesScreen()
         Screen.FIND_PHONE -> FindPhoneScreen()
+        Screen.PHONE_ACCESS -> PhoneAccessScreen()
         Screen.SECURITY -> SecurityScreen(main, power)
         Screen.DOCK -> DockScreen(remote, settings, landscape, onOpenApps = { go(Screen.APPS) })
         Screen.APPS -> AppsScreen(remote)

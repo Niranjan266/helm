@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Helm</title>
 <link rel="stylesheet" href="styles.css">
+<script src="phone-core.js" defer></script>
+<script src="phone.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body>
@@ -31,6 +33,7 @@
     <nav class="nav" aria-label="Main">
       <a href="#home" data-page="home">Home</a>
       <a href="#phones" data-page="phones">Phones</a>
+      <a href="#phone" data-page="phone">Phone</a>
       <a href="#pair" data-page="pair">Pair</a>
       <a href="#activity" data-page="activity">Activity</a>
       <a href="#settings" data-page="settings">Settings</a>
@@ -123,6 +126,55 @@
       </div>
       <div class="actions-row">
         <a href="#pair" data-page="pair" class="btn btn-primary">Pair another phone</a>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================================================ PHONE (view / control) -->
+  <main class="page page-phone" id="page-phone" hidden>
+    <section class="col phone-left">
+      <span class="badge"><span class="num">#6</span>See a phone</span>
+      <h1 class="title">Phone</h1>
+      <p class="lede">See a connected phone here and, if its owner allows it, use it with your mouse and keyboard.
+        The phone asks every time and can stop at any moment.</p>
+
+      <div class="card">
+        <div class="card-head"><span>Fig. 7 · Connected phone</span><span id="phone-size">—</span></div>
+        <div class="card-body form">
+          <p class="muted" id="phone-none" hidden>No phone is connected. Open Helm on the phone and connect to this PC.</p>
+          <select id="phone-select" aria-label="Phone"></select>
+          <div class="inline">
+            <button type="button" class="btn btn-primary" id="phone-request">Request</button>
+            <button type="button" class="btn btn-ghost btn-danger" id="phone-stop" hidden>Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="phone-status" id="phone-status" role="status" aria-live="polite">
+        <strong id="phone-status-title"></strong>
+        <span id="phone-status-text"></span>
+      </div>
+      <p class="note phone-note" id="phone-relay" hidden></p>
+      <p class="note phone-note" id="phone-viewonly" hidden></p>
+      <p class="note phone-note phone-note-secure" id="phone-secure" role="alert" hidden></p>
+
+      <p class="muted">Click to tap, drag to swipe, hold or right-click for a long press, wheel to scroll, type to
+        enter text. Page Up / Down scroll a page. Sessions are recorded in Activity.</p>
+    </section>
+
+    <section class="col phone-right">
+      <div class="phone-stage">
+        <div class="phone-screen">
+          <span class="phone-badge" id="phone-badge" hidden></span>
+          <div class="phone-empty" id="phone-empty">Nothing shared.</div>
+          <canvas id="phone-canvas" tabindex="0" aria-label="Phone screen" hidden></canvas>
+        </div>
+        <div class="phone-side" id="phone-side" hidden>
+          <button type="button" class="btn btn-ghost btn-sm" data-phone-global="back">Back</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-phone-global="home">Home</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-phone-global="recents">Recents</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-phone-global="notifications">Notifications</button>
+        </div>
       </div>
     </section>
   </main>

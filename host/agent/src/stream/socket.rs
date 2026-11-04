@@ -36,6 +36,13 @@ pub async fn run<S>(
         First::Gone => return,
     };
     let token = match serde_json::from_str::<Value>(&text) {
+        // g9: same socket, other direction: the phone sends its screen to the PC.
+        Ok(v) if v.get("type").and_then(Value::as_str) == Some("phone.open") => {
+            let Some(t) = v.get("token").and_then(Value::as_str).map(str::to_string) else {
+                return fail(ws, codes::BAD_MESSAGE, "phone.open needs a token").await;
+            };
+            return crate::phone::socket::run(state, ws, device_id, t, shutdown).await;
+        }
         Ok(v) if v.get("type").and_then(Value::as_str) == Some("stream.open") => {
             match v.get("token").and_then(Value::as_str) {
                 Some(t) => t.to_string(),

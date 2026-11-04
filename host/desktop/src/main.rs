@@ -9,6 +9,7 @@ mod args;
 mod autostart;
 mod commands;
 mod controller;
+mod phone;
 mod settings;
 mod status;
 mod tray;
@@ -58,6 +59,7 @@ fn main() {
             }
         }))
         .manage(updater::Updates::default())
+        .manage(phone::FramePump::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_status,
             commands::get_phones,
@@ -82,6 +84,12 @@ fn main() {
             commands::install_update,
             commands::open_data_dir,
             commands::quit_app,
+            phone::phone_targets,
+            phone::phone_request,
+            phone::phone_stop,
+            phone::phone_ack,
+            phone::phone_keyframe,
+            phone::phone_input,
         ])
         .setup(move |app| {
             let ctl = Arc::new(Controller::new(app.handle().clone(), data_dir.clone()));
