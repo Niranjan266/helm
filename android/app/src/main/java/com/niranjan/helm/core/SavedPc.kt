@@ -42,6 +42,16 @@ data class PcPrefs(
     @SerialName("stream_fill") val streamFill: Boolean? = null,
 )
 
+/**
+ * [SavedPc] with its relay URL normalised like the agent does (`wss://https://host` from an old
+ * agent becomes `wss://host`). An unusable value is dropped. Migrates stored values on load.
+ */
+fun SavedPc.withNormalizedRelay(): SavedPc {
+    val raw = relayUrl ?: return this
+    val fixed = TunnelProtocol.normalizeRelayUrl(raw)
+    return if (fixed == raw) this else copy(relayUrl = fixed)
+}
+
 /** An address found on the LAN for a host id (from mDNS). */
 data class DiscoveredHost(
     val hostId: String,
@@ -60,7 +70,7 @@ object SavedPcCodec {
     fun decode(text: String?): List<SavedPc> {
         if (text.isNullOrBlank()) return emptyList()
         return try {
-            json.decodeFromString(listSer, text)
+            json.decodeFromString(listSer, text).map { it.withNormalizedRelay() }
         } catch (_: Exception) {
             emptyList()
         }
@@ -105,16 +115,17 @@ object EndpointPlanner {
 
     /**
      * Order to try a saved PC: a fresh mDNS address first, then the last address that worked,
-     * then the addresses from the QR code. Duplicates removed.
+     * then the addresses from the QR code. Duplicates removed; with the phone's [nets], addresses
+     * on its own subnet(s) go first, then other private ranges, then the rest.
      */
-    fun forSaved(pc: SavedPc, discovered: DiscoveredHost?): List<Endpoint> {
+    fun forSaved(pc: SavedPc, discovered: DiscoveredHost?, nets: List<PhoneSubnet> = emptyList()): List<Endpoint> {
         val out = LinkedHashSet<Endpoint>()
         if (discovered != null && discovered.hostId.equals(pc.hostId, ignoreCase = true)) {
             out += Endpoint(discovered.address, discovered.port)
         }
         if (pc.lastAddress != null) out += Endpoint(pc.lastAddress, pc.lastPort ?: pc.port)
         for (a in pc.addresses) out += Endpoint(a, pc.port)
-        return out.toList()
+        return EndpointRanking.rank(out.toList(), nets)
     }
 
     /**
@@ -131,14 +142,14 @@ object EndpointPlanner {
     /** The relay route for a pairing link (`r=`), tried after the LAN addresses. */
     fun relayForPairing(uri: PairingUri): RelayTransport? = RelayTransport.forPc(uri.relayUrl, uri.hostId)
 
-    /** Pairing: the QR addresses in order (LAN first, as the agent lists them). */
-    fun forPairing(uri: PairingUri, discovered: DiscoveredHost? = null): List<Endpoint> {
+    /** Pairing: the QR addresses, ranked by [EndpointRanking] when the phone's [nets] are known. */
+    fun forPairing(uri: PairingUri, discovered: DiscoveredHost? = null, nets: List<PhoneSubnet> = emptyList()): List<Endpoint> {
         val out = LinkedHashSet<Endpoint>()
         for (a in uri.addresses) out += Endpoint(a, uri.port)
         if (discovered != null && discovered.hostId.equals(uri.hostId, ignoreCase = true)) {
             out += Endpoint(discovered.address, discovered.port)
         }
-        return out.toList()
+        return EndpointRanking.rank(out.toList(), nets)
     }
 
     /** g4 code pairing: the PC found by mDNS, pinned to the fingerprint the code proved. */
@@ -163,6 +174,6 @@ object EndpointPlanner {
         lastAddress = ready.endpoint.host.takeUnless { ready.viaRelay },
         lastPort = ready.endpoint.port.takeUnless { ready.viaRelay },
         lastUsedMs = nowMs,
-        relayUrl = uri.relayUrl,
+        relayUrl = TunnelProtocol.normalizeRelayUrl(uri.relayUrl),
     )
 }
