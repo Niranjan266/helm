@@ -2,7 +2,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
 
 pub const SERVICE_TYPE: &str = "_helm._tcp.local.";
 
@@ -26,6 +26,18 @@ fn dns_label(name: &str) -> String {
     }
 }
 
+/// The addresses whose interfaces mDNS may use: the chosen ones, once each, in order.
+fn advertise_ips(addresses: &[Ipv4Addr]) -> Vec<IpAddr> {
+    let mut out: Vec<IpAddr> = Vec::new();
+    for a in addresses {
+        let ip = IpAddr::V4(*a);
+        if !out.contains(&ip) {
+            out.push(ip);
+        }
+    }
+    out
+}
+
 impl Advertiser {
     pub fn start(
         host_id: &str,
@@ -34,6 +46,14 @@ impl Advertiser {
         port: u16,
     ) -> anyhow::Result<Advertiser> {
         let daemon = ServiceDaemon::new()?;
+        // Advertise only on the chosen (real LAN) interfaces, not on VirtualBox / VPN adapters.
+        let chosen = advertise_ips(addresses);
+        if !chosen.is_empty() {
+            daemon.disable_interface(IfKind::All)?;
+            for ip in chosen {
+                daemon.enable_interface(IfKind::Addr(ip))?;
+            }
+        }
         let ips: Vec<IpAddr> = addresses.iter().map(|a| IpAddr::V4(*a)).collect();
         let mdns_host = format!("{}.local.", dns_label(host_name));
         let properties = [("v", "1"), ("id", host_id), ("name", host_name)];
@@ -61,6 +81,14 @@ impl Advertiser {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn advertises_only_chosen_addresses_once() {
+        use std::net::Ipv4Addr;
+        let a = Ipv4Addr::new(192, 168, 31, 56);
+        assert_eq!(super::advertise_ips(&[a, a]), vec![std::net::IpAddr::V4(a)]);
+        assert!(super::advertise_ips(&[]).is_empty());
+    }
+
     #[test]
     fn labels() {
         assert_eq!(super::dns_label("DESKTOP-AB12"), "DESKTOP-AB12");

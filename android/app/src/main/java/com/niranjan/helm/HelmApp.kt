@@ -99,6 +99,7 @@ class HelmController(context: Context) {
     val deviceInfo = DeviceInfoStore(context)
     val savedPcs = SavedPcStore(context)
     val discovery = HelmDiscovery(context)
+    private val phoneNets: com.niranjan.helm.core.PhoneNetworks = com.niranjan.helm.device.AndroidPhoneNetworks(context)
     val settings = AppSettings(context)
     val icons = IconCache(context)
     val files = PhoneFiles(context)
@@ -167,7 +168,7 @@ class HelmController(context: Context) {
         val conn = HelmConnection(
             hostId = uri.hostId,
             fingerprint = uri.fingerprint,
-            endpoints = EndpointPlanner.forPairing(uri, discovery.find(uri.hostId)),
+            endpoints = EndpointPlanner.forPairing(uri, discovery.find(uri.hostId), phoneNets.ipv4Subnets()),
             identity = identity(),
             mode = HandshakeMode.Pair(uri.token),
             relay = EndpointPlanner.relayForPairing(uri),
@@ -247,7 +248,7 @@ class HelmController(context: Context) {
     private fun authConnection(pc: SavedPc, found: DiscoveredHost?) = HelmConnection(
         hostId = pc.hostId,
         fingerprint = pc.fingerprint,
-        endpoints = EndpointPlanner.forSaved(pc, found),
+        endpoints = EndpointPlanner.forSaved(pc, found, phoneNets.ipv4Subnets()),
         identity = identity(),
         mode = HandshakeMode.Auth,
         relay = EndpointPlanner.relayFor(pc),
@@ -313,7 +314,7 @@ class HelmController(context: Context) {
             if (pc.hostId.equals(target.hostId, true) || pc.hostId.equals(s?.hostId, true)) continue
             val conn = HelmConnection(
                 hostId = pc.hostId, fingerprint = pc.fingerprint,
-                endpoints = EndpointPlanner.forSaved(pc, discovery.find(pc.hostId)),
+                endpoints = EndpointPlanner.forSaved(pc, discovery.find(pc.hostId), phoneNets.ipv4Subnets()),
                 identity = identity(), mode = HandshakeMode.Auth, relay = EndpointPlanner.relayFor(pc),
             )
             try {
@@ -521,7 +522,7 @@ class HelmController(context: Context) {
         val s = _session.value
         val pc = savedPcs.get(hostId)
         val found = preferred?.let { a -> pc?.let { DiscoveredHost(it.hostId, it.name, a.host, a.port, "") } } ?: discovery.find(hostId)
-        val endpoints = pc?.let { EndpointPlanner.forSaved(it, found) }.orEmpty()
+        val endpoints = pc?.let { EndpointPlanner.forSaved(it, found, phoneNets.ipv4Subnets()) }.orEmpty()
         if (s == null || pc == null || endpoints.isEmpty() || s.connection.transferActive) {
             reconnector.lanProbeFailed(probeId)
             return

@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
@@ -242,58 +244,171 @@ class HelmConnection(
         data class Stop(val error: HelmException) : Attempt
     }
 
-    /** Opens the connection and completes the handshake. Throws [HelmException] on failure. */
-    suspend fun connect(): ReadyInfo {
-        check(started.compareAndSet(false, true)) { "connect() may only be called once" }
-        val clients = HashMap<HelmTransport, okhttp3.OkHttpClient>()
+    /** One opened socket whose agent has said a valid `hello`. */
+    private class HelloWin(val route: Route, val ws: WebSocket, val events: Channel<WsEvent>, val hello: JsonObject)
+
+    private sealed interface RaceResult {
+        class Won(val win: HelloWin) : RaceResult
+        class Stop(val error: HelmException) : RaceResult
+        class AllFailed(val error: HelmException) : RaceResult
+    }
+
+    private val clients = ConcurrentHashMap<HelmTransport, okhttp3.OkHttpClient>()
+
+    private fun clientFor(route: Route): okhttp3.OkHttpClient =
+        clients[route.transport] ?: try {
+            route.transport.client(fingerprint).also { clients[route.transport] = it }
+        } catch (e: Exception) {
+            throw fail(HelmException(LocalCodes.UNREACHABLE, "Could not set up TLS: ${e.message}", e))
+        }
+
+    /** Opens a socket to [route] and waits for its `hello`. The socket is added to [opened]. */
+    private suspend fun tryHello(route: Route, helloLimit: Long, opened: MutableList<WebSocket>): Pair<HelloWin?, Attempt?> {
+        val endpoint = route.endpoint
+        val client = clientFor(route)
+        val events = Channel<WsEvent>(Channel.UNLIMITED)
+        val request = Request.Builder().url(endpoint.url(route.transport.scheme, path)).build()
+        (route.transport as? FingerprintObserver)?.resetObserved()
+        val ws = client.newWebSocket(request, ChannelListener(events))
+        opened += ws
+        return when (val r = awaitHello(events, endpoint, helloLimit)) {
+            is HelloResult.Ok -> HelloWin(route, ws, events, r.hello) to null
+            is HelloResult.Bad -> null to r.attempt
+        }
+    }
+
+    /**
+     * Tries the LAN endpoints at the same time (the first valid `hello` wins, the rest are
+     * cancelled), or one after the other when the transport observes certificates (code pairing).
+     * Only the `hello` is raced; `pair` / `auth` go to the winner alone. An agent refusal on any
+     * endpoint stops at once; a pin mismatch is kept over plain timeouts.
+     */
+    private suspend fun raceLan(lan: List<Route>, helloLimit: Long, budgetMs: Long?): RaceResult {
+        val opened = java.util.Collections.synchronizedList(ArrayList<WebSocket>())
         var lastError: HelmException? = null
-        val lanDeadline = System.currentTimeMillis() + lanBudgetMs
-        for (route in routes) {
-            val endpoint = route.endpoint
-            if (closedByUser.get()) throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
-            val hasFallback = relay != null && !route.transport.relayed
-            if (hasFallback && System.currentTimeMillis() >= lanDeadline) continue
-            val client = clients[route.transport] ?: try {
-                route.transport.client(fingerprint).also { clients[route.transport] = it }
-            } catch (e: Exception) {
-                throw fail(HelmException(LocalCodes.UNREACHABLE, "Could not set up TLS: ${e.message}", e))
-            }
-            _state.value = ConnectionState.Connecting(endpoint)
-            val events = Channel<WsEvent>(Channel.UNLIMITED)
-            val request = Request.Builder().url(endpoint.url(route.transport.scheme, path)).build()
-            (route.transport as? FingerprintObserver)?.resetObserved()
-            val ws = client.newWebSocket(request, ChannelListener(events))
-            socket = ws
-            val helloLimit = when {
-                route.transport.relayed -> maxOf(helloTimeoutMs, relayHelloTimeoutMs)
-                hasFallback -> minOf(helloTimeoutMs, (lanDeadline - System.currentTimeMillis()).coerceAtLeast(1_000))
-                else -> helloTimeoutMs
-            }
-            when (val attempt = handshake(ws, events, endpoint, route.transport as? FingerprintObserver, helloLimit)) {
-                is Attempt.Success -> {
-                    readyInfo = attempt.info.copy(viaRelay = route.transport.relayed)
-                    hostFeatures = attempt.info.features
-                    if (closedByUser.get()) {
-                        ws.close(1000, null)
-                        throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+        fun note(e: HelmException) {
+            if (lastError?.code != LocalCodes.PIN_MISMATCH) lastError = e
+        }
+        val parallel = lan.size > 1 && lan.none { it.transport is FingerprintObserver }
+        var winner: HelloWin? = null
+        var stop: HelmException? = null
+        _state.value = ConnectionState.Connecting(lan.first().endpoint)
+        withTimeoutOrNull(budgetMs ?: Long.MAX_VALUE) {
+            if (parallel) {
+                val results = Channel<Pair<HelloWin?, Attempt?>>(Channel.UNLIMITED)
+                coroutineScope {
+                    for (route in lan) launch {
+                        results.send(
+                            try {
+                                tryHello(route, helloLimit, opened)
+                            } catch (e: HelmException) {
+                                null to Attempt.Stop(e)
+                            },
+                        )
                     }
-                    _state.value = ConnectionState.Ready(attempt.info.tier, endpoint)
-                    scope.launch { readLoop(events) }
-                    return readyInfo!!
+                    var left = lan.size
+                    while (left-- > 0) {
+                        val (win, attempt) = results.receive()
+                        if (win != null) {
+                            winner = win
+                            break
+                        }
+                        if (attempt is Attempt.Stop) {
+                            stop = attempt.error
+                            break
+                        }
+                        if (attempt is Attempt.TryNext) note(attempt.error)
+                    }
+                    coroutineContext.cancelChildren()
                 }
-                is Attempt.TryNext -> {
-                    ws.cancel()
-                    socket = null
-                    // A pin mismatch is more informative than a later timeout; keep it.
-                    if (lastError?.code != LocalCodes.PIN_MISMATCH) lastError = attempt.error                }
-                is Attempt.Stop -> {
-                    ws.cancel()
-                    socket = null
-                    throw fail(attempt.error)
+            } else {
+                for (route in lan) {
+                    if (closedByUser.get()) break
+                    val (win, attempt) = tryHello(route, helloLimit, opened)
+                    if (win != null) {
+                        winner = win
+                        break
+                    }
+                    if (attempt is Attempt.Stop) {
+                        stop = attempt.error
+                        break
+                    }
+                    if (attempt is Attempt.TryNext) note(attempt.error)
                 }
             }
         }
-        throw fail(lastError ?: HelmException(LocalCodes.UNREACHABLE, "Could not reach the PC."))
+        val won = winner
+        for (ws in opened.toList()) if (won == null || ws !== won.ws) ws.cancel()
+        stop?.let { return RaceResult.Stop(it) }
+        if (won != null) return RaceResult.Won(won)
+        return RaceResult.AllFailed(
+            lastError ?: HelmException(LocalCodes.UNREACHABLE, "Could not reach the PC on the local network."),
+        )
+    }
+
+    /** Opens the connection and completes the handshake. Throws [HelmException] on failure. */
+    suspend fun connect(): ReadyInfo {
+        check(started.compareAndSet(false, true)) { "connect() may only be called once" }
+        var lastError: HelmException? = null
+        val lan = routes.filter { !it.transport.relayed }
+        val relayRoute = routes.firstOrNull { it.transport.relayed }
+        if (closedByUser.get()) throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+        var win: HelloWin? = null
+        if (lan.isNotEmpty()) {
+            val hasFallback = relayRoute != null
+            val limit = if (hasFallback) minOf(helloTimeoutMs, lanBudgetMs) else helloTimeoutMs
+            when (val r = raceLan(lan, limit, if (hasFallback) lanBudgetMs else null)) {
+                is RaceResult.Won -> win = r.win
+                is RaceResult.Stop -> throw fail(r.error)
+                is RaceResult.AllFailed -> lastError = r.error
+            }
+        }
+        if (win == null && relayRoute != null) {
+            if (closedByUser.get()) throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+            val client = clientFor(relayRoute)
+            _state.value = ConnectionState.Connecting(relayRoute.endpoint)
+            val events = Channel<WsEvent>(Channel.UNLIMITED)
+            val request = Request.Builder().url(relayRoute.endpoint.url(relayRoute.transport.scheme, path)).build()
+            val ws = client.newWebSocket(request, ChannelListener(events))
+            when (val r = awaitHello(events, relayRoute.endpoint, maxOf(helloTimeoutMs, relayHelloTimeoutMs))) {
+                is HelloResult.Ok -> win = HelloWin(relayRoute, ws, events, r.hello)
+                is HelloResult.Bad -> {
+                    ws.cancel()
+                    val a = r.attempt
+                    if (a is Attempt.Stop) throw fail(a.error)
+                    if (a is Attempt.TryNext && lastError?.code != LocalCodes.PIN_MISMATCH) lastError = a.error
+                }
+            }
+        }
+        val w = win ?: throw fail(lastError ?: HelmException(LocalCodes.UNREACHABLE, "Could not reach the PC."))
+        socket = w.ws
+        if (closedByUser.get()) {
+            w.ws.cancel()
+            throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+        }
+        when (val attempt = handshake(w.ws, w.events, w.route.endpoint, w.route.transport as? FingerprintObserver, w.hello)) {
+            is Attempt.Success -> {
+                readyInfo = attempt.info.copy(viaRelay = w.route.transport.relayed)
+                hostFeatures = attempt.info.features
+                if (closedByUser.get()) {
+                    w.ws.close(1000, null)
+                    throw HelmException(LocalCodes.CLOSED, "Connection was closed.")
+                }
+                _state.value = ConnectionState.Ready(attempt.info.tier, w.route.endpoint)
+                scope.launch { readLoop(w.events) }
+                return readyInfo!!
+            }
+            is Attempt.Stop -> {
+                w.ws.cancel()
+                socket = null
+                throw fail(attempt.error)
+            }
+            is Attempt.TryNext -> {
+                w.ws.cancel()
+                socket = null
+                throw fail(attempt.error)
+            }
+        }
     }
 
     private fun fail(e: HelmException): HelmException {
@@ -302,49 +417,62 @@ class HelmConnection(
         return e
     }
 
-    private suspend fun handshake(
-        ws: WebSocket,
-        events: Channel<WsEvent>,
-        endpoint: Endpoint,
-        observer: FingerprintObserver? = null,
-        helloLimitMs: Long = helloTimeoutMs,
-    ): Attempt {
-        // 1. Wait for `hello` (agent speaks first). Anything that fails before a first message
-        //    means "no Helm agent reachable here" -> try the next endpoint.
+    private sealed interface HelloResult {
+        class Ok(val hello: JsonObject) : HelloResult
+        class Bad(val attempt: Attempt) : HelloResult
+    }
+
+    /**
+     * Waits for the agent's `hello` (it speaks first) and checks it. Anything that fails before a
+     * first message means "no Helm agent reachable here" ([Attempt.TryNext]).
+     */
+    private suspend fun awaitHello(events: Channel<WsEvent>, endpoint: Endpoint, helloLimitMs: Long): HelloResult {
         val first = withTimeoutOrNull(helloLimitMs) { nextMessage(events) }
-            ?: return Attempt.TryNext(
-                HelmException(LocalCodes.UNREACHABLE, "No answer from the PC at $endpoint."),
+            ?: return HelloResult.Bad(
+                Attempt.TryNext(HelmException(LocalCodes.UNREACHABLE, "No answer from the PC at $endpoint.")),
             )
         val hello: JsonObject = when (first) {
             is Incoming.Message -> first.obj
-                ?: return Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC sent a non-JSON message."))
-            is Incoming.Failed -> return Attempt.TryNext(transportError(first.error, first.httpCode, endpoint))
-            is Incoming.Closed -> return Attempt.TryNext(
-                HelmException(LocalCodes.UNREACHABLE, "PC at $endpoint closed the connection."),
+                ?: return HelloResult.Bad(Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC sent a non-JSON message.")))
+            is Incoming.Failed -> return HelloResult.Bad(Attempt.TryNext(transportError(first.error, first.httpCode, endpoint)))
+            is Incoming.Closed -> return HelloResult.Bad(
+                Attempt.TryNext(HelmException(LocalCodes.UNREACHABLE, "PC at $endpoint closed the connection.")),
             )
         }
-
         when (hello.str("type")) {
             "hello" -> Unit
-            "error" -> return Attempt.Stop(agentError(hello))
-            else -> return Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC did not send hello."))
+            "error" -> return HelloResult.Bad(Attempt.Stop(agentError(hello)))
+            else -> return HelloResult.Bad(Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC did not send hello.")))
         }
         val protocol = (hello["protocol"] as? JsonPrimitive)?.intOrNull
         if (protocol != 1) {
-            return Attempt.Stop(
-                HelmException(LocalCodes.PROTOCOL_VERSION, "PC speaks protocol $protocol; this app speaks 1."),
+            return HelloResult.Bad(
+                Attempt.Stop(HelmException(LocalCodes.PROTOCOL_VERSION, "PC speaks protocol $protocol; this app speaks 1.")),
             )
         }
         val helloHostId = hello.str("host_id")
         val nonce = hello.str("nonce")
         if (helloHostId.isNullOrEmpty() || nonce.isNullOrEmpty()) {
-            return Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC sent an incomplete hello."))
+            return HelloResult.Bad(Attempt.Stop(HelmException(LocalCodes.BAD_HELLO, "PC sent an incomplete hello.")))
         }
         if (!helloHostId.equals(hostId, ignoreCase = true)) {
-            return Attempt.Stop(
-                HelmException(LocalCodes.HOST_MISMATCH, "This address belongs to a different PC."),
+            return HelloResult.Bad(
+                Attempt.Stop(HelmException(LocalCodes.HOST_MISMATCH, "This address belongs to a different PC.")),
             )
         }
+        return HelloResult.Ok(hello)
+    }
+
+    /** Steps 2-3 of the handshake on a socket whose [hello] was accepted by [awaitHello]. */
+    private suspend fun handshake(
+        ws: WebSocket,
+        events: Channel<WsEvent>,
+        endpoint: Endpoint,
+        observer: FingerprintObserver?,
+        hello: JsonObject,
+    ): Attempt {
+        val helloHostId = hello.str("host_id")!!
+        val nonce = hello.str("nonce")!!
 
         val helloFeatures = (hello["features"] as? JsonArray).orEmpty()
             .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
