@@ -81,6 +81,11 @@ pub struct Config {
     pub approval_timeout: Duration,
     /// g9: how long a phone has to answer a view / control request (tests shorten it).
     pub phone_request_timeout: Duration,
+    /// Before sign-in (run by the "Stay reachable after restart" service as LocalSystem,
+    /// with no desktop): only screen-less methods ([`crate::modules::PRE_LOGIN_METHODS`])
+    /// are offered, no identity is ever created, and no desktop watchers or background
+    /// automations (triggers, schedules, alerts) run.
+    pub pre_login: bool,
 }
 
 impl Config {
@@ -105,6 +110,7 @@ impl Config {
             wifi_poll: crate::p5::WIFI_POLL,
             approval_timeout: crate::g4::approval::APPROVAL_TIMEOUT,
             phone_request_timeout: crate::phone::REQUEST_TIMEOUT,
+            pre_login: false,
         }
     }
 }
@@ -171,6 +177,8 @@ pub struct AppState {
     pub pointer: Arc<crate::pointer::PointerSettings>,
     /// g9: the PC views and controls a phone (Docs/protocol/phone-control.md).
     pub phone: crate::phone::PhoneHub,
+    /// Running before sign-in ([`Config::pre_login`]).
+    pub pre_login: bool,
     windows_poll: Duration,
     pairing: Mutex<PairingState>,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
@@ -192,7 +200,12 @@ impl AppState {
             .host_name
             .clone()
             .unwrap_or_else(identity::computer_name);
-        let identity = Identity::load_or_create(&config.data_dir, host_name)?;
+        let identity = if config.pre_login {
+            // Never mint a new identity here: phones pin the user's one.
+            Identity::load_existing(&config.data_dir, host_name)?
+        } else {
+            Identity::load_or_create(&config.data_dir, host_name)?
+        };
         let platform: Arc<dyn Platform> = match &config.platform {
             Some(p) => p.clone(),
             None => Arc::new(RealPlatform::new(&config.data_dir.join("icon-cache"))),
@@ -243,11 +256,16 @@ impl AppState {
                 config.phone_request_timeout,
                 config.stream_token_lifetime,
             ),
+            pre_login: config.pre_login,
             windows_poll: config.windows_poll,
             pairing: Mutex::new(PairingState::new(config.token_lifetime, config.lockout)),
             sessions: Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(1),
-            router: Router::new(modules::all()),
+            router: if config.pre_login {
+                Router::only(modules::all(), modules::PRE_LOGIN_METHODS)
+            } else {
+                Router::new(modules::all())
+            },
             handshake_timeout: config.handshake_timeout,
             stream_tokens: Mutex::new(TokenStore::new(config.stream_token_lifetime)),
             stream_token_lifetime: config.stream_token_lifetime,
@@ -476,18 +494,22 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         }
     });
 
-    let (events_tx, events_rx) = mpsc::unbounded_channel();
-    let watchers = {
+    let mut background = Vec::new();
+    // Before sign-in there is no desktop to watch and nobody to run automations for.
+    let watchers = if state.pre_login {
+        None
+    } else {
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
         let platform = state.platform.clone();
-        tokio::task::spawn_blocking(move || platform.start_watchers(events_tx)).await?
+        let watchers =
+            tokio::task::spawn_blocking(move || platform.start_watchers(events_tx)).await?;
+        background.push(tokio::spawn(pump_events(state.clone(), events_rx)));
+        background.push(tokio::spawn(poll_windows(state.clone())));
+        background.extend(crate::p3::spawn(&state));
+        background.extend(crate::p5::spawn(&state));
+        background.extend(crate::g6::spawn(&state));
+        Some(watchers)
     };
-    let mut background = vec![
-        tokio::spawn(pump_events(state.clone(), events_rx)),
-        tokio::spawn(poll_windows(state.clone())),
-    ];
-    background.extend(crate::p3::spawn(&state));
-    background.extend(crate::p5::spawn(&state));
-    background.extend(crate::g6::spawn(&state));
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     background.push(tokio::spawn(crate::relay::run(
@@ -506,7 +528,7 @@ pub async fn start(config: Config) -> anyhow::Result<ServerHandle> {
         task,
         mdns,
         background,
-        watchers: Some(watchers),
+        watchers,
     })
 }
 

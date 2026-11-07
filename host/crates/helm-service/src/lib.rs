@@ -15,6 +15,7 @@
 pub mod backoff;
 pub mod cli;
 pub mod cmdline;
+pub mod prelogin;
 pub mod supervisor;
 
 #[cfg(windows)]

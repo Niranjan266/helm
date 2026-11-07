@@ -114,6 +114,14 @@ impl Router {
         Router { modules, index }
     }
 
+    /// Like [`Router::new`], but only the methods named in `allowed` are offered (the rest
+    /// answer `unknown_method`, as if this build did not have them).
+    pub fn only(modules: Vec<Arc<dyn Module>>, allowed: &[&str]) -> Router {
+        let mut router = Router::new(modules);
+        router.index.retain(|name, _| allowed.contains(name));
+        router
+    }
+
     pub fn method_names(&self) -> Vec<&'static str> {
         let mut names: Vec<_> = self.index.keys().copied().collect();
         names.sort_unstable();
