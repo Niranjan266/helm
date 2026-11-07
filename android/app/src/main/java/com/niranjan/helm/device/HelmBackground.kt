@@ -109,6 +109,7 @@ class HelmBackground(private val context: Context, private val controller: HelmC
     private fun publish() {
         val st = _state.value
         HelmWidget.updateAll(context, st)
+        PowerWidget.updateAll(context, st)
         if (st.connected) HelmSessionService.show(context) else HelmSessionService.hide(context)
         HelmSessionService.refresh(context, st)
         WearBridge.publish(context, st)

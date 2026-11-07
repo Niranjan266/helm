@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Power widget (Blueprint look): PC name + status, then Lock / Sleep / Shut down / Screen. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_power_bg"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <LinearLayout
+        android:id="@+id/wp_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp">
+
+        <ImageView
+            android:id="@+id/wp_dot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:layout_marginEnd="8dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/widget_dot_online" />
+
+        <TextView
+            android:id="@+id/wp_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:fontFamily="@font/archivo_variable"
+            android:maxLines="1"
+            android:text="@string/app_name"
+            android:textColor="#EAF2FF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/wp_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:fontFamily="@font/ibm_plex_mono_regular"
+            android:maxLines="1"
+            android:text="@string/widget_power_status_preview"
+            android:textColor="#9DB8E8"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:minHeight="40dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/wp_lock"
+            style="@style/HelmPowerButton"
+            android:text="@string/tile_lock" />
+
+        <TextView
+            android:id="@+id/wp_sleep"
+            style="@style/HelmPowerButton"
+            android:text="@string/widget_power_sleep" />
+
+        <TextView
+            android:id="@+id/wp_shutdown"
+            style="@style/HelmPowerButton"
+            android:background="@drawable/widget_power_btn_danger"
+            android:text="@string/widget_power_shutdown"
+            android:textColor="#FFB3A8" />
+
+        <TextView
+            android:id="@+id/wp_screen"
+            style="@style/HelmPowerButton"
+            android:background="@drawable/widget_power_btn_primary"
+            android:text="@string/widget_power_screen"
+            android:textColor="#061F4D" />
+    </LinearLayout>
+</LinearLayout>
