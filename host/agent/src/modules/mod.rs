@@ -64,6 +64,21 @@ pub fn all() -> Vec<Arc<dyn Module>> {
     ]
 }
 
+/// What a phone can do before anyone signs in to Windows (the agent runs as LocalSystem
+/// with no desktop): stay connected, read basic info, and lock / sleep / restart / shut
+/// down the PC. Nothing that shows the screen, injects input, opens files, runs programs or
+/// changes paired devices or settings.
+pub const PRE_LOGIN_METHODS: &[&str] = &[
+    "system.ping",
+    "system.info",
+    "power.action",
+    "power.cancel",
+    "power.status",
+    "relay.get",
+    "wol.send",
+    "devices.list",
+];
+
 /// Required string parameter.
 pub(crate) fn str_param<'a>(params: &'a Value, name: &str) -> Result<&'a str, RpcError> {
     params

@@ -51,6 +51,18 @@ impl Module for PowerModule {
             "power.action" => {
                 let action: PowerAction = typed_param(&params, "action")?;
                 let delay_s = opt_u64(&params, "delay_s")?.unwrap_or(0);
+                if state.pre_login {
+                    match action {
+                        // The sign-in screen is already showing: nothing to lock.
+                        PowerAction::Lock => return Ok(json!({"scheduled": null})),
+                        PowerAction::SignOut => {
+                            return Err(RpcError::unsupported(
+                                "nobody is signed in to this PC yet",
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
                 state.audit.record(
                     "power",
                     Some(&ctx.device_id),

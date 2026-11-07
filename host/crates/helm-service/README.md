@@ -29,5 +29,20 @@ helm-service run ...      (what the SCM invokes)
 The decision logic (`supervisor`, `backoff`, `cmdline`, `cli`) is pure and
 covered by `cargo test`; the tests never install or start the service.
 
+## HelmSignIn ("Stay reachable after restart")
+
+A second, separate service used by the desktop app (`Helm.exe`), not by `helm-service.exe`.
+`prelogin` (pure: command line, hand-over state machine) and `win::prelogin` (SCM glue)
+live here; the agent itself and the elevated set-up helpers are in
+`host/desktop/src/reach.rs`.
+
+- Runs a copy of `Helm.exe` from `%ProgramFiles%\Helm\SignIn` as LocalSystem, with
+  `--signin-run --data-dir <owner's %APPDATA%\Helm> --owner <owner SID>`.
+- Serves only while the owner has **no** Windows session (boot, signed out); a locked or
+  disconnected session counts as signed in. Stops as soon as the owner signs in, so the
+  desktop app gets port 47820 back; starts again 3 s after they sign out.
+- Before sign-in only screen-less methods exist (ping, info, power, `relay.get`,
+  `wol.send`, `devices.list`), over LAN and relay, with the same identity and phones.
+
 Not yet: running the agent on the secure desktop (UAC prompts, lock screen),
 which is the next Phase 5 step.

@@ -38,6 +38,46 @@ pub fn protect(plain: &[u8]) -> anyhow::Result<Vec<u8>> {
     }
 }
 
+/// Name of the machine-scope scheme (see [`protect_machine`]).
+pub const MACHINE_SCHEME: &str = "dpapi-machine";
+
+/// Encrypt for *this computer* rather than this user (`CRYPTPROTECT_LOCAL_MACHINE`), so the
+/// sign-in service (LocalSystem, before anyone has signed in) can decrypt it. Any process on
+/// this PC that can read the file can decrypt it, so callers must only write the result
+/// where file permissions already restrict it to the user, SYSTEM and administrators.
+#[cfg(windows)]
+pub fn protect_machine(plain: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use windows::Win32::Security::Cryptography::{
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData,
+    };
+    use windows::core::w;
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: u32::try_from(plain.len())?,
+        pbData: plain.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    // SAFETY: as in `protect`.
+    unsafe {
+        CryptProtectData(
+            &input,
+            w!("Helm agent key (sign-in service)"),
+            None,
+            None,
+            None,
+            CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
+            &mut output,
+        )?;
+        Ok(take_blob(output))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn protect_machine(plain: &[u8]) -> anyhow::Result<Vec<u8>> {
+    Ok(plain.to_vec())
+}
+
 #[cfg(windows)]
 pub fn unprotect(cipher: &[u8]) -> anyhow::Result<Vec<u8>> {
     use windows::Win32::Security::Cryptography::{
@@ -96,6 +136,15 @@ mod tests {
     fn round_trip() {
         let secret = b"not really a key";
         let sealed = super::protect(secret).unwrap();
+        #[cfg(windows)]
+        assert_ne!(sealed.as_slice(), secret.as_slice());
+        assert_eq!(super::unprotect(&sealed).unwrap(), secret);
+    }
+
+    #[test]
+    fn machine_round_trip() {
+        let secret = b"not really a key either";
+        let sealed = super::protect_machine(secret).unwrap();
         #[cfg(windows)]
         assert_ne!(sealed.as_slice(), secret.as_slice());
         assert_eq!(super::unprotect(&sealed).unwrap(), secret);

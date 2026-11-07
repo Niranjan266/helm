@@ -95,6 +95,15 @@ pub fn set_autostart(on: bool) -> Result<bool, String> {
     Ok(crate::autostart::is_enabled())
 }
 
+/// "Stay reachable after restart": install / remove the sign-in service (one UAC prompt).
+#[tauri::command]
+pub async fn set_reach(ctl: Ctl<'_>, on: bool) -> Result<bool, String> {
+    let data_dir = ctl.data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::reach::set_enabled(&data_dir, on))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn set_port(ctl: Ctl<'_>, port: u32) -> Result<(), String> {
     let port = validate_port(port)?;
