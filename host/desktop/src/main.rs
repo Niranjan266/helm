@@ -10,6 +10,7 @@ mod autostart;
 mod commands;
 mod controller;
 mod phone;
+mod reach;
 mod settings;
 mod status;
 mod tray;
@@ -38,6 +39,11 @@ fn init_logging(data_dir: &Path) {
 }
 
 fn main() {
+    // The sign-in service and its elevated set-up helpers: no window, no single-instance.
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(code) = reach::handle_cli(&argv) {
+        std::process::exit(code);
+    }
     // Physical pixels for capture, cursor and absolute input (see helm-win-capture).
     helm_agent::screen::make_process_dpi_aware();
     let launch = args::parse(std::env::args());
@@ -76,6 +82,7 @@ fn main() {
             commands::get_activity,
             commands::get_settings,
             commands::set_autostart,
+            commands::set_reach,
             commands::set_port,
             commands::set_relay,
             commands::set_paused,
