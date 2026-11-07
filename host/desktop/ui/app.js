@@ -435,6 +435,7 @@
     state.settings = s;
     $('#s-autostart').checked = s.autostart;
     $('#s-autostart').closest('label').title = s.autostart_key;
+    $('#s-reach').checked = s.reach;
     if (document.activeElement !== $('#s-port')) $('#s-port').value = s.port;
     if (document.activeElement !== $('#s-relay-url')) $('#s-relay-url').value = s.relay_url;
     $('#s-approval').checked = s.require_approval;
@@ -473,6 +474,22 @@
       toast(now ? 'Helm will start with Windows.' : 'Helm will not start with Windows.');
     } catch {
       e.target.checked = !want;
+    }
+  });
+
+  $('#s-reach').addEventListener('change', async (e) => {
+    const want = e.target.checked;
+    e.target.disabled = true;
+    try {
+      const now = await call('set_reach', { on: want });
+      e.target.checked = now;
+      if (!now) toast('Phones can reach this PC only after you sign in.');
+      else if (!$('#s-autostart').checked) toast('Phones can reach this PC before sign-in. Turn on Start with Windows too, so Helm takes over when you sign in.');
+      else toast('Phones can reach this PC before sign-in (lock, sleep, restart, shut down).');
+    } catch {
+      e.target.checked = !want;
+    } finally {
+      e.target.disabled = false;
     }
   });
 
@@ -576,7 +593,7 @@
         { time: new Date(now - 6e4).toISOString(), event: 'auth_ok', device_id: 'a', device_name: 'Pixel 8', peer: '192.168.0.42:5555', detail: '', text: 'Pixel 8 connected' },
         { time: new Date(now - 3e6).toISOString(), event: 'pair_fail', device_id: null, device_name: null, peer: '192.168.0.50:4000', detail: 'bad_token', text: 'Pairing refused (bad token)' },
       ],
-      get_settings: { require_approval: false, autostart: false, autostart_key: 'HKCU\\…\\Run', port: 47820, relay_enabled: false, relay_url: 'wss://relay.example.com', data_dir: '', version: '0.1.0' },
+      get_settings: { require_approval: false, autostart: false, autostart_key: 'HKCU\\…\\Run', reach: false, port: 47820, relay_enabled: false, relay_url: 'wss://relay.example.com', data_dir: '', version: '0.1.0' },
     };
     if (cmd in sample) return sample[cmd];
     throw new Error('Preview only: not connected to Helm.');

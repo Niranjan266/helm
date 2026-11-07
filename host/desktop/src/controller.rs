@@ -133,6 +133,8 @@ pub struct SettingsView {
     pub require_approval: bool,
     pub autostart: bool,
     pub autostart_key: String,
+    /// "Stay reachable after restart" (the HelmSignIn service is installed).
+    pub reach: bool,
     pub port: u16,
     pub relay_enabled: bool,
     pub relay_url: String,
@@ -219,6 +221,10 @@ impl Controller {
         let mut config = Config::new(&self.data_dir);
         config.port = Settings::load(&self.data_dir).port;
         config.enable_mdns = true;
+        // Just signed in: the sign-in service is letting go of the port the phones know.
+        if crate::reach::is_enabled() {
+            crate::reach::wait_for_port(config.port, Duration::from_secs(20)).await;
+        }
         // Boxed: the agent's start future is deep enough to overflow rustc's stack when
         // checked inline inside the Tauri async runtime's Send bounds.
         match Box::pin(helm_agent::start(config)).await {
@@ -641,6 +647,7 @@ impl Controller {
             require_approval: self.require_approval(),
             autostart: crate::autostart::is_enabled(),
             autostart_key: crate::autostart::registry_path(),
+            reach: crate::reach::is_enabled(),
             port: Settings::load(&self.data_dir).port,
             relay_enabled: relay.enabled,
             relay_url: relay.url,

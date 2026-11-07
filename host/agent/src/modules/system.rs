@@ -67,6 +67,8 @@ impl Module for SystemModule {
                     "macs": macs,
                     "battery": battery,
                     "relay": ctx.state.relay.info(),
+                    // Nobody is signed in to Windows yet: only screen-less methods work.
+                    "pre_login": ctx.state.pre_login,
                 }))
             }
             _ => Err(RpcError::unknown_method(method)),
