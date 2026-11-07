@@ -6,11 +6,15 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.niranjan.helm.HelmApp
 import com.niranjan.helm.core.ConnectionState
+import com.niranjan.helm.core.DataSaver
+import com.niranjan.helm.core.SaverOverride
+import com.niranjan.helm.core.SaverReason
 import com.niranjan.helm.core.HelmConnection
 import com.niranjan.helm.core.HelmException
 import com.niranjan.helm.core.MonitorInfo
@@ -44,6 +48,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -76,8 +82,10 @@ data class StreamUi(
     val reconnects: Int = 0,
     /** This stream runs over the relay (§12). */
     val viaRelay: Boolean = false,
-    /** What the relay policy picked; the controls show this while on the relay. */
+    /** What the data-saver policy picked; the controls show this while saver is on. */
     val relayChoice: com.niranjan.helm.core.StreamChoice? = null,
+    /** Why data saver is on for this stream (null = normal quality). */
+    val saver: SaverReason? = null,
 )
 
 /** G3 stream options (Docs/protocol/streaming-2.md). Not persisted: each visit starts plain. */
@@ -208,11 +216,28 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
 
     private val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private var lastNetwork: Network? = null
+    /** The phone's default network is cellular (not Wi-Fi / Ethernet). */
+    @Volatile
+    private var onMobileData = false
+
+    private fun isMobile(caps: NetworkCapabilities?): Boolean =
+        caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+            !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+
     private val netCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             val changed = lastNetwork != null && lastNetwork != network
             lastNetwork = network
+            onMobileData = isMobile(runCatching { connectivity.getNetworkCapabilities(network) }.getOrNull())
             if (changed) restart.tryEmit("network")
+        }
+
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (network != lastNetwork) return
+            val mobile = isMobile(caps)
+            if (mobile == onMobileData) return
+            onMobileData = mobile
+            if (session != null && saverReason() != _ui.value.saver) restart.tryEmit("saver")
         }
 
         override fun onLost(network: Network) {
@@ -223,6 +248,12 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
     init {
         runCatching { connectivity.registerDefaultNetworkCallback(netCallback) }
         audio.enabled = settings.value.streamAudio
+        // The settings toggle applies to a running stream straight away.
+        viewModelScope.launch {
+            settings.map { it.streamDataSaver }.distinctUntilChanged().drop(1).collect {
+                if (session != null && saverReason() != _ui.value.saver) restart.tryEmit("saver")
+            }
+        }
     }
 
     private val control: HelmConnection?
@@ -300,11 +331,31 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The user's quality picks while on the relay; they don't touch the LAN settings. */
+    /** The user's quality picks while data saver is on; they don't touch the normal settings. */
     private var relayPick: StreamPreset? = null
     private var relayKbps = 0
 
-    private val onRelay: Boolean get() = control?.readyInfo?.viaRelay == true
+    /** Per-session data-saver override; it belongs to [overrideConn] and resets with a new connection. */
+    private var saverOverride = SaverOverride.AUTO
+    private var overrideConn: HelmConnection? = null
+
+    private fun saverReason(): SaverReason? {
+        val c = control
+        val override = if (c != null && c === overrideConn) saverOverride else SaverOverride.AUTO
+        return DataSaver.reason(override, settings.value.streamDataSaver, onMobileData, c?.readyInfo?.viaRelay == true)
+    }
+
+    /** Data saver is on for the current stream (its quality picks are kept apart). */
+    private val onRelay: Boolean get() = _ui.value.saver != null
+
+    /** Flip data saver for this session (until the connection changes). */
+    fun toggleDataSaver() {
+        overrideConn = control
+        saverOverride = DataSaver.toggled(saverReason() != null)
+        relayPick = null
+        relayKbps = 0
+        restart.tryEmit("saver")
+    }
 
     fun setPreset(p: StreamPreset) {
         if (onRelay) {
@@ -355,10 +406,11 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
     private fun request(): StreamRequest {
         val st = settings.value
         val perPc = controller.prefsFor(controller.session.value?.hostId).streamPreset
-        val viaRelay = onRelay
-        val choice = com.niranjan.helm.core.RelayStreamPolicy.choose(viaRelay, perPc, st.streamPreset, st.streamBitrateKbps, relayPick, relayKbps)
+        val viaRelay = control?.readyInfo?.viaRelay == true
+        val saver = saverReason()
+        val choice = DataSaver.choose(saver, perPc, st.streamPreset, st.streamBitrateKbps, relayPick, relayKbps)
         val preset = choice.preset
-        _ui.update { it.copy(viaRelay = viaRelay, relayChoice = choice.takeIf { viaRelay }) }
+        _ui.update { it.copy(viaRelay = viaRelay, saver = saver, relayChoice = choice.takeIf { saver != null }) }
         val g = _g3.value
         val g3 = control?.supportsG3 == true
         val m = _ui.value.monitor

@@ -26,6 +26,8 @@ data class Settings(
     /** Swipe mode: tap clicks where you touch, one-finger swipe scrolls (like a phone). */
     val streamSwipe: Boolean = false,
     val streamShowStats: Boolean = false,
+    /** Data saver: lower stream quality on mobile data (the relay always saves data). */
+    val streamDataSaver: Boolean = true,
     /** Phase 5: mirror this phone's notifications to the PC (off by default). */
     val mirrorNotifications: Boolean = false,
     /** Package names allowed to mirror; empty = none. */
@@ -54,6 +56,7 @@ class AppSettings(context: Context) {
         streamDirectTouch = prefs.getBoolean("st_direct", false),
         streamSwipe = prefs.getBoolean("st_swipe", false),
         streamShowStats = prefs.getBoolean("st_stats", false),
+        streamDataSaver = prefs.getBoolean("st_saver", true),
         mirrorNotifications = prefs.getBoolean("nm_on", false),
         mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
         lockAfterMin = prefs.getInt("lock_min", 0).coerceAtLeast(0),
@@ -74,6 +77,7 @@ class AppSettings(context: Context) {
             .putBoolean("st_direct", s.streamDirectTouch)
             .putBoolean("st_swipe", s.streamSwipe)
             .putBoolean("st_stats", s.streamShowStats)
+            .putBoolean("st_saver", s.streamDataSaver)
             .putBoolean("nm_on", s.mirrorNotifications)
             .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))
             .putInt("lock_min", s.lockAfterMin)

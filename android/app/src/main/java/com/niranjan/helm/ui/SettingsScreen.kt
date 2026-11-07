@@ -41,6 +41,7 @@ fun SettingsScreen(
                 }
             }
             ToggleRow("Smart order: most used apps first (dock and app list)", settings.smartOrder) { v -> onSettings { it.copy(smartOrder = v) } }
+            ToggleRow("Data saver on mobile data (lower screen quality)", settings.streamDataSaver) { v -> onSettings { it.copy(streamDataSaver = v) } }
         }
         SectionCard("App lock") {
             Text("Lock Helm after it is in the background for")

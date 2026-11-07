@@ -186,13 +186,15 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
             ?: remoteUi.monitors.firstOrNull { it.isPrimary }?.width)
         if (penMode && remoteUi.phase5) PenOverlay({ transform }, remote::send, Modifier.fillMaxSize())
         if (settings.streamShowStats) StatsOverlay(ui, Modifier.align(Alignment.TopStart).padding(8.dp))
-        if (ui.relayChoice?.loweredForRelay == true && ui.streaming) {
+        val saver = ui.saver
+        if (saver != null && ui.relayChoice?.loweredForRelay == true && ui.streaming) {
             MonoLabel(
-                com.niranjan.helm.core.RelayStreamPolicy.NOTICE,
+                com.niranjan.helm.core.DataSaver.notice(saver),
                 color = Color.White,
                 modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp),
             )
         }
+        if (ui.streaming && !settings.streamShowStats) StreamQualityBadge(ui, Modifier.align(Alignment.BottomEnd).padding(6.dp))
         if (!ui.streaming) StatusOverlay(ui, onRetry = { vm.setActive(false); vm.setActive(true) }, Modifier.align(Alignment.Center))
         if ((fullscreen || !showControls) && extrasUi.recording != null) RecordingDot(extrasUi, Modifier.align(Alignment.TopStart).padding(8.dp))
         if (!fullscreen && !showControls) {
@@ -340,6 +342,30 @@ private fun StatsOverlay(ui: StreamUi, modifier: Modifier) {
         style = MaterialTheme.typography.labelSmall,
         modifier = modifier.background(Color(0x99000000), RoundedCornerShape(2.dp)).padding(6.dp),
     )
+}
+
+/** Small signal badge over the stream: quality, fps and bitrate (hidden while Stats is on). */
+@Composable
+private fun StreamQualityBadge(ui: StreamUi, modifier: Modifier) {
+    val s = ui.stats ?: return
+    val q = com.niranjan.helm.core.LinkQuality.of(s.rttMs.toLong(), s.dropped, s.decodedFps) ?: return
+    val c = Bp.c
+    val dot = when (q) {
+        com.niranjan.helm.core.LinkQuality.GOOD -> c.ok
+        com.niranjan.helm.core.LinkQuality.OK -> c.pencil
+        com.niranjan.helm.core.LinkQuality.WEAK -> c.red
+    }
+    androidx.compose.foundation.layout.Row(
+        modifier.background(Color(0x99000000), RoundedCornerShape(2.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        MonoLabel("● ", color = dot)
+        MonoLabel(
+            "${q.label} · ${com.niranjan.helm.core.LinkQuality.streamText(s.decodedFps, s.rxKbps)}" + (if (ui.saver != null) " · saver" else ""),
+            color = Color.White.copy(alpha = 0.85f),
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable
