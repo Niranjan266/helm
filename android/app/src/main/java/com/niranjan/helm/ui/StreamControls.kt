@@ -82,11 +82,12 @@ fun StreamControls(
         )
         Picker(
             label = "${"%.1f".format(kbps / 1000f)} Mbps",
-            items = if (ui.viaRelay) com.niranjan.helm.core.RelayStreamPolicy.BITRATES else preset.bitrateChoices,
+            items = if (ui.saver != null) com.niranjan.helm.core.RelayStreamPolicy.BITRATES else preset.bitrateChoices,
             itemLabel = { "${"%.1f".format(it / 1000f)} Mbps" },
             onPick = vm::setBitrate,
         )
         BpFilterChip(selected = settings.streamAudio, onClick = { vm.setAudio(!settings.streamAudio) }, label = { Text("Sound") })
+        BpFilterChip(selected = ui.saver != null, onClick = vm::toggleDataSaver, label = { Text("Data saver") })
         BpFilterChip(selected = settings.streamShowStats, onClick = { vm.setShowStats(!settings.streamShowStats) }, label = { Text("Stats") })
         TextButton(onClick = onResetView) { Text("Fit") }
         TextButton(onClick = vm::requestKeyframe) { Text("Refresh") }

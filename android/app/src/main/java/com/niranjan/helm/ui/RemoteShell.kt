@@ -209,9 +209,17 @@ fun RemoteShell(
     val openDrawer: () -> Unit = { scope.launch { drawer.open() } }
     val status = when {
         reconnect.isReconnecting -> "Reconnecting…"
-        else -> listOfNotNull(session.name, sessionUi.pingMs?.let { "$it ms" }, linkBadge).joinToString(" · ")
+        else -> listOfNotNull(session.name, com.niranjan.helm.core.LinkQuality.statusText(sessionUi.pingMs), linkBadge).joinToString(" · ")
     }
-    val statusColor = if (reconnect.isReconnecting) c.pencilInk else c.ok
+    // Signal: the status dot follows the latency (Good / OK / Weak).
+    val statusColor = when {
+        reconnect.isReconnecting -> c.pencilInk
+        else -> when (com.niranjan.helm.core.LinkQuality.of(sessionUi.pingMs)) {
+            com.niranjan.helm.core.LinkQuality.OK -> c.pencilInk
+            com.niranjan.helm.core.LinkQuality.WEAK -> c.redInk
+            else -> c.ok
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawer,
