@@ -20,6 +20,8 @@ class AdminGate(
     private val required: () -> Boolean,
     private val onError: (String) -> Unit,
     private val graceMs: Long = 60_000,
+    /** Called when the user dismisses the prompt without confirming. */
+    private val onCancel: () -> Unit = {},
 ) {
     private var unlockedUntil = 0L
 
@@ -41,6 +43,8 @@ class AdminGate(
                         errorCode != BiometricPrompt.ERROR_CANCELED
                     ) {
                         onError("Not confirmed: $errString")
+                    } else {
+                        onCancel()
                     }
                 }
             },

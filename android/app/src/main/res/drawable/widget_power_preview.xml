@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview for launchers before Android 12 (newer ones render widget_power itself). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="250dp"
+    android:height="100dp"
+    android:viewportWidth="250"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#0D3A86"
+        android:strokeColor="#4DEAF2FF"
+        android:strokeWidth="1"
+        android:pathData="M14,0.5h222a13.5,13.5 0,0 1,13.5 13.5v72a13.5,13.5 0,0 1,-13.5 13.5h-222a13.5,13.5 0,0 1,-13.5 -13.5v-72a13.5,13.5 0,0 1,13.5 -13.5z" />
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M14,20a4,4 0,1 1,8 0a4,4 0,1 1,-8 0z" />
+    <path
+        android:fillColor="#EAF2FF"
+        android:pathData="M28,15h90v9h-90z" />
+    <path
+        android:fillColor="#9DB8E8"
+        android:pathData="M196,17h40v5h-40z" />
+    <path
+        android:fillColor="#061F4D"
+        android:strokeColor="#4DEAF2FF"
+        android:strokeWidth="1"
+        android:pathData="M10,46h53v42h-53z" />
+    <path
+        android:fillColor="#061F4D"
+        android:strokeColor="#4DEAF2FF"
+        android:strokeWidth="1"
+        android:pathData="M69,46h53v42h-53z" />
+    <path
+        android:fillColor="#061F4D"
+        android:strokeColor="#FF5A47"
+        android:strokeWidth="1"
+        android:pathData="M128,46h53v42h-53z" />
+    <path
+        android:fillColor="#FFD84D"
+        android:pathData="M187,46h53v42h-53z" />
+</vector>
