@@ -28,8 +28,8 @@ android {
         applicationId = "com.niranjan.helm"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "0.4.2"
+        versionCode = 8
+        versionName = "0.5.0"
         buildConfigField("String", "UPDATE_PUBLIC_KEY", "\"$updatePublicKey\"")
     }
 
