@@ -76,6 +76,8 @@ const val QUICK_MEDIA = "media"
 const val QUICK_DECK = "deck"
 const val QUICK_LOCK = "lock"
 const val QUICK_MUTE = "mute"
+/** Power widget: `arg` is a [com.niranjan.helm.core.WidgetPower] action. */
+const val QUICK_POWER = "power"
 
 /** One live (or failed) connection the UI is showing. */
 data class Session(
@@ -370,6 +372,18 @@ class HelmController(context: Context) {
                 QUICK_MEDIA -> { api.mediaControl(arg ?: "toggle_play_pause"); "OK" }
                 QUICK_DECK -> { api.runDeck(arg ?: return "No button."); "OK" }
                 QUICK_LOCK -> { api.powerAction("lock", null); "Locked the PC." }
+                QUICK_POWER -> {
+                    val action = arg?.takeIf { com.niranjan.helm.core.WidgetPower.isSupported(it) } ?: return "Unknown action."
+                    val scheduled = try {
+                        api.powerAction(action, null)
+                    } catch (e: HelmException) {
+                        // Sleep / shut down can drop the socket before the reply arrives.
+                        if (action != com.niranjan.helm.core.WidgetPower.LOCK &&
+                            (e.code == LocalCodes.CONNECTION_LOST || e.code == LocalCodes.CLOSED)
+                        ) null else throw e
+                    }
+                    com.niranjan.helm.core.WidgetPower.doneText(action, scheduled?.let { it.dueUnixMs - System.currentTimeMillis() })
+                }
                 QUICK_MUTE -> {
                     val muted = api.audio()?.muted ?: false
                     api.setAudio(muted = !muted)

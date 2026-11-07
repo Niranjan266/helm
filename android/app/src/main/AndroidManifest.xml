@@ -98,6 +98,26 @@
                 android:resource="@xml/helm_widget_info" />
         </receiver>
 
+        <!-- Power widget: Lock / Sleep / Shut down (asks first) / Screen tab. -->
+        <receiver
+            android:name=".device.PowerWidget"
+            android:exported="true"
+            android:label="@string/widget_power_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/power_widget_info" />
+        </receiver>
+
+        <activity
+            android:name=".ui.PowerActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="com.niranjan.helm.power"
+            android:theme="@style/Theme.Helm.WidgetAction" />
+
         <service
             android:name=".device.LockPcTile"
             android:exported="true"

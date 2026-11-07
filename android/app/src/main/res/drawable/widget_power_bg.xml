@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Power widget card: blueprint paper with a fine ink hairline. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#F20D3A86" />
+    <stroke android:width="1dp" android:color="#4DEAF2FF" />
+    <corners android:radius="14dp" />
+</shape>

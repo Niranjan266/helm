@@ -195,9 +195,24 @@ class MainActivity : FragmentActivity() {
                     }
                 }
             }
+            ACTION_OPEN_SCREEN -> {
+                intent.action = null
+                openScreen(intent.getStringExtra(EXTRA_SCREEN))
+            }
             Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> handleShare(intent)
             else -> handlePairLink(intent)
         }
+    }
+
+    /** Home-screen widget shortcut: open one tab, connecting to the last PC when needed. */
+    private fun openScreen(name: String?) {
+        val target = Screen.entries.firstOrNull { it.name == name } ?: return
+        val controller = (application as HelmApp).controller
+        if (controller.session.value == null) {
+            val pc = controller.savedPcs.pcs.value.firstOrNull() ?: return vm.message("Pair with a PC first.")
+            controller.connectSaved(pc)
+        }
+        navTo.value = target
     }
 
     /** "Send to PC" from another app: files, text or a URL. */
@@ -243,6 +258,14 @@ class MainActivity : FragmentActivity() {
 
     companion object {
         const val ACTION_LOCK_PC = "com.niranjan.helm.LOCK_PC"
+        const val ACTION_OPEN_SCREEN = "com.niranjan.helm.OPEN_SCREEN"
+
+        /** [Screen] name to open, e.g. `SCREEN`. */
+        const val EXTRA_SCREEN = "com.niranjan.helm.extra.SCREEN"
+
+        /** Explicit intent that opens the app on one tab (used by the power widget). */
+        fun screenIntent(context: android.content.Context, screen: String): Intent =
+            Intent(context, MainActivity::class.java).setAction(ACTION_OPEN_SCREEN).putExtra(EXTRA_SCREEN, screen)
     }
 
     private fun scanQr() {
