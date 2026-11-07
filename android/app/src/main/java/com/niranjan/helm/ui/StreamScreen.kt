@@ -161,6 +161,8 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 Modifier.dragSelectGestures(
                     direct = directInput,
                     speed = settings.touchpadSpeed,
+                    scrollSpeed = settings.streamScrollSpeed,
+                    reverseScroll = settings.streamReverseScroll,
                     haptics = settings.haptics,
                     remote = remote,
                     abs = absBatcher,
@@ -172,6 +174,8 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 direct = directInput,
                 swipe = settings.streamSwipe,
                 speed = settings.touchpadSpeed,
+                scrollSpeed = settings.streamScrollSpeed,
+                reverseScroll = settings.streamReverseScroll,
                 haptics = settings.haptics,
                 remote = remote,
                 abs = absBatcher,
@@ -227,6 +231,14 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 onExit = { vm.exitFullscreen() },
                 modifier = Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.displayCutout),
             )
+            if (settings.streamQuickKeys && !g3.secondScreen) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = toolbar.visible && !showKeyboard,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.displayCutout),
+                ) { StreamQuickKeys(remote, settings.haptics, toolbar = toolbar) }
+            }
             if (showKeyboard) FullscreenKeyboardSlot(remote, onClose = { showKeyboard = false }, Modifier.fillMaxSize())
         }
         return
@@ -247,6 +259,7 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 onLandscapeLock = vm::setLandscapeLock,
             )
             if (g3.supported) G3Controls(vm, g3, remoteUi.windows, remoteUi.monitors)
+            if (settings.streamQuickKeys && !g3.secondScreen) StreamQuickKeys(remote, settings.haptics)
             if (remoteUi.phase5) {
                 ExtrasBar(
                     ui = extrasUi,
