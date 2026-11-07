@@ -43,6 +43,16 @@ fun SettingsScreen(
             ToggleRow("Smart order: most used apps first (dock and app list)", settings.smartOrder) { v -> onSettings { it.copy(smartOrder = v) } }
             ToggleRow("Data saver on mobile data (lower screen quality)", settings.streamDataSaver) { v -> onSettings { it.copy(streamDataSaver = v) } }
         }
+        SectionCard("Screen tab") {
+            Text("Scroll speed: ${"%.2f".format(settings.streamScrollSpeed)}×")
+            DiamondSlider(
+                value = settings.streamScrollSpeed,
+                onValueChange = { v -> onSettings { it.copy(streamScrollSpeed = com.niranjan.helm.core.ScrollTuning.clampSpeed(v)) } },
+                valueRange = com.niranjan.helm.core.ScrollTuning.MIN_SPEED..com.niranjan.helm.core.ScrollTuning.MAX_SPEED,
+            )
+            ToggleRow("Reverse scroll direction", settings.streamReverseScroll) { v -> onSettings { it.copy(streamReverseScroll = v) } }
+            ToggleRow("Show quick keys (Ctrl+C, Ctrl+V, Alt+Tab, ...)", settings.streamQuickKeys) { v -> onSettings { it.copy(streamQuickKeys = v) } }
+        }
         SectionCard("App lock") {
             Text("Lock Helm after it is in the background for")
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
