@@ -267,6 +267,8 @@ fun Modifier.viewOnlyGestures(onTap: () -> Unit): Modifier = pointerInput(Unit) 
 fun Modifier.dragSelectGestures(
     direct: Boolean,
     speed: Float,
+    scrollSpeed: Float = com.niranjan.helm.core.ScrollTuning.DEFAULT_SPEED,
+    reverseScroll: Boolean = false,
     haptics: Boolean,
     remote: RemoteViewModel,
     abs: AbsMoveBatcher,
@@ -278,8 +280,15 @@ fun Modifier.dragSelectGestures(
     val haptic = LocalHapticFeedback.current
     val currentSpeed by rememberUpdatedState(speed)
     val currentHaptics by rememberUpdatedState(haptics)
+    val currentScrollSpeed by rememberUpdatedState(scrollSpeed)
+    val currentReverse by rememberUpdatedState(reverseScroll)
     val slop = with(density) { 8.dp.toPx() }
     val notchPx = with(density) { 36.dp.toPx() }
+    val fling = rememberStreamFling(remote)
+    var scrolled = false
+    // Fingers down for the current move, and for the last wheel scroll (fling starts when they lift).
+    var curPointers = 1
+    var scrollPointers = 1
 
     fun flushAbs() {
         abs.take()?.let { remote.send(it) }
@@ -287,7 +296,15 @@ fun Modifier.dragSelectGestures(
     }
 
     fun panOrScroll(dx: Float, dy: Float) {
-        if (transform().canPan) setTransform(transform().panBy(dx, dy)) else remote.touchScroll(-dx / notchPx, dy / notchPx)
+        if (transform().canPan) {
+            setTransform(transform().panBy(dx, dy))
+        } else {
+            val (nx, ny) = com.niranjan.helm.core.ScrollTuning.notches(dx, dy, notchPx, currentScrollSpeed, currentReverse)
+            remote.touchScroll(nx, ny)
+            fling.sample(SystemClock.uptimeMillis(), nx, ny)
+            scrolled = true
+            scrollPointers = curPointers
+        }
     }
 
     fun run(actions: List<DragAction>) {
@@ -322,6 +339,10 @@ fun Modifier.dragSelectGestures(
         awaitEachGesture {
             val ds = DragSelect(direct = direct, slopPx = slop)
             val first = awaitFirstDown(requireUnconsumed = false)
+            // Any new touch stops a running fling.
+            fling.stop()
+            scrolled = false
+            var liftAt = -1L
             val start = SystemClock.uptimeMillis()
             var maxPointers = 1
             run(ds.down(first.position.x, first.position.y, start))
@@ -339,6 +360,7 @@ fun Modifier.dragSelectGestures(
                         continue
                     }
                     val pressed = event.changes.filter { it.pressed }
+                    if (scrolled && liftAt < 0 && pressed.size < scrollPointers) liftAt = now
                     if (pressed.isEmpty()) {
                         if (maxPointers >= 3 && now - start < 300) {
                             ds.cancel()
@@ -346,6 +368,7 @@ fun Modifier.dragSelectGestures(
                         } else {
                             run(ds.up(now))
                         }
+                        if (scrolled) fling.release(liftAt)
                         break
                     }
                     maxPointers = max(maxPointers, pressed.size)
@@ -354,9 +377,11 @@ fun Modifier.dragSelectGestures(
                         val b = pressed[1]
                         val c = (a.position + b.position) / 2f
                         val d = c - (a.previousPosition + b.previousPosition) / 2f
+                        curPointers = pressed.size
                         run(ds.pointers(pressed.size, d.x, d.y))
                     } else {
                         val p = pressed[0]
+                        curPointers = 1
                         run(ds.move(p.position.x, p.position.y, now))
                     }
                     event.changes.forEach { it.consume() }
