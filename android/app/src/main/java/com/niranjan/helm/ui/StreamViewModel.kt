@@ -341,7 +341,10 @@ class StreamViewModel(app: Application) : AndroidViewModel(app) {
         restart.tryEmit("audio") // the PC only captures audio when asked in stream.start
     }
 
-    fun setDirectTouch(on: Boolean) = controller.settings.update { it.copy(streamDirectTouch = on) }
+    fun setDirectTouch(on: Boolean) = controller.settings.update { it.copy(streamDirectTouch = on, streamSwipe = false) }
+
+    /** Swipe mode: direct taps plus one-finger scrolling. */
+    fun setSwipe() = controller.settings.update { it.copy(streamDirectTouch = false, streamSwipe = true) }
 
     fun setShowStats(on: Boolean) = controller.settings.update { it.copy(streamShowStats = on) }
 

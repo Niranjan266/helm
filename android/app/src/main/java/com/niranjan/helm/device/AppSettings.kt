@@ -23,6 +23,8 @@ data class Settings(
     val streamAudio: Boolean = true,
     /** true = direct touch (tap where you see), false = trackpad. */
     val streamDirectTouch: Boolean = false,
+    /** Swipe mode: tap clicks where you touch, one-finger swipe scrolls (like a phone). */
+    val streamSwipe: Boolean = false,
     val streamShowStats: Boolean = false,
     /** Phase 5: mirror this phone's notifications to the PC (off by default). */
     val mirrorNotifications: Boolean = false,
@@ -50,6 +52,7 @@ class AppSettings(context: Context) {
         streamBitrateKbps = prefs.getInt("st_kbps", 0).coerceAtLeast(0),
         streamAudio = prefs.getBoolean("st_audio", true),
         streamDirectTouch = prefs.getBoolean("st_direct", false),
+        streamSwipe = prefs.getBoolean("st_swipe", false),
         streamShowStats = prefs.getBoolean("st_stats", false),
         mirrorNotifications = prefs.getBoolean("nm_on", false),
         mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
@@ -69,6 +72,7 @@ class AppSettings(context: Context) {
             .putInt("st_kbps", s.streamBitrateKbps)
             .putBoolean("st_audio", s.streamAudio)
             .putBoolean("st_direct", s.streamDirectTouch)
+            .putBoolean("st_swipe", s.streamSwipe)
             .putBoolean("st_stats", s.streamShowStats)
             .putBoolean("nm_on", s.mirrorNotifications)
             .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))

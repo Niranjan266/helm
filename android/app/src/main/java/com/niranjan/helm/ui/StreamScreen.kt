@@ -132,8 +132,9 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
     }
 
     // Trackpad mode while zoomed: keep the PC cursor in view.
-    LaunchedEffect(settings.streamDirectTouch) {
-        if (settings.streamDirectTouch) return@LaunchedEffect
+    val directInput = settings.streamDirectTouch || settings.streamSwipe
+    LaunchedEffect(directInput) {
+        if (directInput) return@LaunchedEffect
         vm.cursor.collect { c ->
             if (c != null && transform.canPan) {
                 val (x, y) = transform.toView(c.x, c.y)
@@ -158,7 +159,7 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                 Modifier.viewOnlyGestures { toggleControls() }
             } else if (g3.dragMode) {
                 Modifier.dragSelectGestures(
-                    direct = settings.streamDirectTouch,
+                    direct = directInput,
                     speed = settings.touchpadSpeed,
                     haptics = settings.haptics,
                     remote = remote,
@@ -168,7 +169,8 @@ fun StreamScreen(remote: RemoteViewModel, settings: Settings) {
                     onThreeFingerTap = toggleControls,
                 )
             } else Modifier.streamGestures(
-                direct = settings.streamDirectTouch,
+                direct = directInput,
+                swipe = settings.streamSwipe,
                 speed = settings.touchpadSpeed,
                 haptics = settings.haptics,
                 remote = remote,

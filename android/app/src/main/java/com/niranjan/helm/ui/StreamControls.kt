@@ -60,8 +60,9 @@ fun StreamControls(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BpFilterChip(selected = !settings.streamDirectTouch, onClick = { vm.setDirectTouch(false) }, label = { Text("Trackpad") })
-        BpFilterChip(selected = settings.streamDirectTouch, onClick = { vm.setDirectTouch(true) }, label = { Text("Touch") })
+        BpFilterChip(selected = !settings.streamDirectTouch && !settings.streamSwipe, onClick = { vm.setDirectTouch(false) }, label = { Text("Trackpad") })
+        BpFilterChip(selected = settings.streamDirectTouch && !settings.streamSwipe, onClick = { vm.setDirectTouch(true) }, label = { Text("Touch") })
+        BpFilterChip(selected = settings.streamSwipe, onClick = { vm.setSwipe() }, label = { Text("Swipe") })
         BpFilterChip(selected = keyboardOn, onClick = { onKeyboard(!keyboardOn) }, label = { Text("Keyboard") })
         if (onLandscapeLock != null) {
             BpFilterChip(selected = landscapeLock, onClick = { onLandscapeLock(!landscapeLock) }, label = { Text("Landscape") })

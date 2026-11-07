@@ -30,10 +30,13 @@ private enum class Multi { NONE, SCROLL, PINCH }
  * right click, 2-finger drag = scroll.
  * Direct mode: tap = move there (`ma`) + left click, drag = left-button drag, long press = right
  * click; 2-finger drag pans the view when zoomed, otherwise scrolls.
+ * Swipe mode (direct + [swipe]): like a phone. Tap = click there, one-finger swipe scrolls (pans
+ * the view when zoomed), long press = right click.
  * Both: pinch zooms the view (not the PC), 3-finger tap toggles the controls.
  */
 fun Modifier.streamGestures(
     direct: Boolean,
+    swipe: Boolean = false,
     speed: Float,
     haptics: Boolean,
     remote: RemoteViewModel,
@@ -60,7 +63,7 @@ fun Modifier.streamGestures(
         return true
     }
 
-    pointerInput(direct) {
+    pointerInput(direct, swipe) {
         awaitEachGesture {
             val first = awaitFirstDown(requireUnconsumed = false)
             val start = first.uptimeMillis
@@ -75,8 +78,9 @@ fun Modifier.streamGestures(
             var spanTravel = 0f
             var dragging = false
             var longPressed = false
+            var swiping = false
             while (true) {
-                val waitLong = direct && maxPointers == 1 && !dragging && !longPressed && moved < slop
+                val waitLong = direct && maxPointers == 1 && !dragging && !swiping && !longPressed && moved < slop
                 val event: PointerEvent? = if (waitLong) {
                     val left = LONG_PRESS_MS - (System.currentTimeMillis() - startWall)
                     if (left <= 0) null else withTimeoutOrNull(left) { awaitPointerEvent() }
@@ -97,11 +101,25 @@ fun Modifier.streamGestures(
                 if (pressed.isEmpty()) break
                 maxPointers = max(maxPointers, pressed.size)
 
-                if (pressed.size == 1 && (maxPointers == 1 || dragging)) {
+                if (pressed.size == 1 && (maxPointers == 1 || dragging || swiping)) {
                     val c = pressed[0]
                     val d = c.position - c.previousPosition
                     moved += d.getDistance()
-                    if (direct) {
+                    if (direct && swipe) {
+                        if (!longPressed && !swiping && moved > slop) {
+                            // Put the cursor under the finger so Windows scrolls that window.
+                            swiping = true
+                            if (!transform().canPan) absAt(downAt)
+                        }
+                        if (swiping) {
+                            if (transform().canPan) {
+                                setTransform(transform().panBy(d.x, d.y))
+                            } else {
+                                // Natural scrolling: finger down = content down = wheel up.
+                                remote.touchScroll(-d.x / notchPx, d.y / notchPx)
+                            }
+                        }
+                    } else if (direct) {
                         if (!longPressed && !dragging && moved > slop) {
                             if (absAt(downAt)) {
                                 remote.send(InputFrame.Button(MouseButton.LEFT, true))
@@ -117,7 +135,7 @@ fun Modifier.streamGestures(
                         remote.touchMove(dx, dy)
                     }
                     last = c.uptimeMillis
-                } else if (pressed.size >= 2 && !dragging) {
+                } else if (pressed.size >= 2 && !dragging && !swiping) {
                     val a = pressed[0]
                     val b = pressed[1]
                     val centroid = (a.position + b.position) / 2f
