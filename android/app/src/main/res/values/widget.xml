@@ -15,4 +15,38 @@
         <item name="android:textSize">12sp</item>
         <item name="android:background">#3B82F6</item>
     </style>
+
+    <!-- Power widget -->
+    <string name="widget_power_label">Helm power</string>
+    <string name="widget_power_description">Lock, sleep or shut down your PC, or jump to its screen</string>
+    <string name="widget_power_sleep">Sleep</string>
+    <string name="widget_power_shutdown">Shut down</string>
+    <string name="widget_power_screen">Screen</string>
+    <string name="widget_power_status_preview">Online</string>
+    <style name="HelmPowerButton">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_margin">3dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:maxLines">2</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:fontFamily">@font/ibm_plex_mono_medium</item>
+        <item name="android:textColor">#EAF2FF</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:background">@drawable/widget_power_btn</item>
+    </style>
+    <!-- The see-through screen behind the power widget's buttons. -->
+    <style name="Theme.Helm.WidgetAction" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+    <!-- Shut-down confirmation in Blueprint colours. -->
+    <style name="Theme.Helm.WidgetDialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:colorBackground">#0D3A86</item>
+        <item name="android:textColorPrimary">#EAF2FF</item>
+        <item name="android:textColorSecondary">#9DB8E8</item>
+        <item name="android:colorAccent">#FFD84D</item>
+    </style>
 </resources>
