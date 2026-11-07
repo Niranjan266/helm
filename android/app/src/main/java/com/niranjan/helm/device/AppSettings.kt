@@ -34,6 +34,12 @@ data class Settings(
     val lockAfterMin: Int = 0,
     /** G5: order dock tiles and the app list by how much each app is used on the PC. */
     val smartOrder: Boolean = false,
+    /** Screen tab scroll speed (swipe, two-finger and fling), [com.niranjan.helm.core.ScrollTuning] range. */
+    val streamScrollSpeed: Float = 1f,
+    /** Screen tab: reverse the (natural) scroll direction. */
+    val streamReverseScroll: Boolean = false,
+    /** Screen tab: show the quick keys row (Ctrl+C, Ctrl+V, ...). */
+    val streamQuickKeys: Boolean = true,
 )
 
 /** Phone-local preferences (not synced to the PC). */
@@ -58,6 +64,9 @@ class AppSettings(context: Context) {
         mirrorApps = com.niranjan.helm.core.NotifyAllowList.decode(prefs.getString("nm_apps", null)),
         lockAfterMin = prefs.getInt("lock_min", 0).coerceAtLeast(0),
         smartOrder = prefs.getBoolean("smart_order", false),
+        streamScrollSpeed = com.niranjan.helm.core.ScrollTuning.clampSpeed(prefs.getFloat("st_scroll_speed", 1f)),
+        streamReverseScroll = prefs.getBoolean("st_scroll_rev", false),
+        streamQuickKeys = prefs.getBoolean("st_quick_keys", true),
     )
 
     fun update(change: (Settings) -> Settings) {
@@ -78,6 +87,9 @@ class AppSettings(context: Context) {
             .putString("nm_apps", com.niranjan.helm.core.NotifyAllowList.encode(s.mirrorApps))
             .putInt("lock_min", s.lockAfterMin)
             .putBoolean("smart_order", s.smartOrder)
+            .putFloat("st_scroll_speed", s.streamScrollSpeed)
+            .putBoolean("st_scroll_rev", s.streamReverseScroll)
+            .putBoolean("st_quick_keys", s.streamQuickKeys)
             .apply()
         _settings.value = s
     }
