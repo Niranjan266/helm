@@ -4,7 +4,7 @@
 
 [Website](https://helm.niranjand.in) · [Download](https://github.com/Niranjan266/helm/releases/latest) · [Protocol docs](Docs/PROTOCOL.md) · [How I built it](https://www.niranjand.in/blog/helm-secure-android-remote-for-windows-pc)
 
-![Helm website hero](docs/screenshots/hero.png)
+![Helm website hero](Docs/screenshots/hero.png)
 
 ## What it is
 
@@ -31,9 +31,9 @@ There is no account, no cloud login and no subscription. The phone and the PC ta
 
 | | |
 |---|---|
-| ![How it works: run the agent, scan the QR, locked together, take the helm](docs/screenshots/how-it-works.png) | ![Live screen: capture, encode, Wi-Fi, decode, display](docs/screenshots/live-screen.png) |
+| ![How it works: run the agent, scan the QR, locked together, take the helm](Docs/screenshots/how-it-works.png) | ![Live screen: capture, encode, Wi-Fi, decode, display](Docs/screenshots/live-screen.png) |
 | *Setup is one scan long* | *The live screen pipeline* |
-| ![Parts list of features](docs/screenshots/features.png) | ![Security model: QR token, pinned TLS, device keys, tiers, audit log](docs/screenshots/security.png) |
+| ![Parts list of features](Docs/screenshots/features.png) | ![Security model: QR token, pinned TLS, device keys, tiers, audit log](Docs/screenshots/security.png) |
 | *Everything the PC can do, itemised* | *Only your phone holds the key* |
 
 ## How it works
